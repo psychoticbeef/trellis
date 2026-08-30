@@ -101,7 +101,7 @@ func status(t *testing.T, e *core.Engine, storyID string) string {
 	return r.Status
 }
 
-func TestTreeRules(t *testing.T) {
+func TestTreeRules_IT_1(t *testing.T) {
 	e := newEngine(t)
 	story := mustCreate(t, e, model.KindStory, "", "s", nil)
 
@@ -244,7 +244,7 @@ func TestCrossCuttingDependencies(t *testing.T) {
 	wantErr(t, err, "delete blocked", "dependent "+tr.arch)
 }
 
-func TestDeleteGuards(t *testing.T) {
+func TestDeleteGuards_IT_1(t *testing.T) {
 	e := newEngine(t)
 	tr := fullTree(t, e)
 
