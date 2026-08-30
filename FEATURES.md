@@ -35,6 +35,7 @@
 - **US-30** — Interoperable MCP output schemas
 - **US-31** — Release commits carry trellis authority
 - **US-32** — Coverage visibility
+- **US-33** — Bidirectional audit
 
 ## Glossary
 

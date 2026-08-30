@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 32
-    AT: 36
+    AS: 33
+    AT: 37
     CC: 4
-    DD: 33
-    IT: 32
-    US: 32
-    UT: 33
+    DD: 34
+    IT: 33
+    US: 33
+    UT: 34
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -74,6 +74,7 @@ counters:
     ac:US-30: 3
     ac:US-31: 2
     ac:US-32: 4
+    ac:US-33: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2270,3 +2271,79 @@ stories:
             tests:
                 - trellis/internal/mcpserver::TestCoverageAcceptance_AT_36
             recorded_at: "2026-08-30T19:09:52Z"
+    - id: US-33
+      kind: story
+      title: Bidirectional audit
+      body: 'As the process owner I want spec and reality validated in both directions, repo-wide and on demand: no spec without a living test, no spec-referencing test without its spec, no declared path pointing nowhere — and the dangerous backward file direction stays informational, because a README belongs to no feature and never should.'
+      status: done
+      acceptance_criteria:
+        - id: US-33.AC-1
+          given: a project with done stories
+          when: trellis audit runs
+          then: 'it executes the test command once and re-verifies every done story repo-wide: each test spec still has passing, non-skipped tests and every declared story path still exists — post-done drift becomes a violation'
+        - id: US-33.AC-2
+          given: tests whose names reference spec ids
+          when: the audit scans the report
+          then: a reference to a nonexistent spec node is a violation (rot after prune or renumbering); tests referencing no spec at all are listed informationally as unbound, never gated
+        - id: US-33.AC-3
+          given: files in the repository
+          when: the audit compares them with all declared story paths
+          then: unclaimed source files are listed informationally with common meta files (README, LICENSE, manifests, dotfiles) excluded — the backward file direction never blocks anything
+        - id: US-33.AC-4
+          given: an audit result
+          when: it is consumed
+          then: the audit never mutates, exits 0 without violations and 1 with them (informational findings never flip the code), and the same report is available to agents as an MCP tool
+      approved_content_hash: 81c71173cf75cfd451b2715eda72058ed5a5afa568ebec3ef1b822954317362a
+      children:
+        - id: AS-33
+          kind: arch
+          title: One audit pass over report, specs and tree
+          body: 'audit runs the configured test command in the main worktree, parses the JUnit report once, and walks: (forward) every done story''s test specs through the existing verifier plus declared path existence; (backward) every test case name for spec-id patterns resolved against live nodes, and git-tracked files against the union of declared paths with a meta-file exclusion list. Violations and infos stay separate; nothing mutates. Surface: trellis audit (CLI, exit code) and an audit MCP tool returning the same envelope.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: f40570e5202e9b13e6096e7c25bb6bfc4d16235deca4f696ab40467abdb719bf
+          approved_parent_hash: 81c71173cf75cfd451b2715eda72058ed5a5afa568ebec3ef1b822954317362a
+          children:
+            - id: DD-34
+              kind: detail_design
+              title: Audit mechanics
+              body: 'core.Audit: run test_cmd, ParseGlob; per done story reuse testreport.Verify and missingPathsIn against the repo root; backward scan via regex (AT|IT|UT)[-_]\\d+ over case names resolved with GetNode; unclaimed files via git ls-files minus PathCovers over all stories'' paths minus meta patterns; AuditReport{violations, infos}. CLI command audit; MCP tool audit with object envelope.'
+              approved_content_hash: de3cac5086b4803e5b98376a3a6e4721ec70ffde45c4337eddc6b607b55c8c2f
+              approved_parent_hash: f40570e5202e9b13e6096e7c25bb6bfc4d16235deca4f696ab40467abdb719bf
+              children:
+                - id: UT-34
+                  kind: unit_test
+                  title: Audit unit tests
+                  body: Unit-test the spec-id extraction (boundaries, US ids excluded from test binding), meta-file exclusion patterns, unclaimed-file computation with nested declared folders, and report envelope serialization.
+                  approved_content_hash: 227aa23a7e9af663f46748a4ddbf6c0ac9be444b0d998aa6c5f36b89edf0cabd
+                  approved_parent_hash: de3cac5086b4803e5b98376a3a6e4721ec70ffde45c4337eddc6b607b55c8c2f
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestAuditUnit_UT_34
+                    recorded_at: "2026-08-30T19:44:51Z"
+            - id: IT-33
+              kind: integration_test
+              title: Audit integration
+              body: Engine + git repo covering the full rot matrix incl. clean-repo exit 0, each violation class, informational-only findings, and meta-file exclusion.
+              approved_content_hash: 6d2eeb4df32f22b54e2280e99a2dbb4af2cd2d4dbdffa17278adffa797c6c2ed
+              approved_parent_hash: f40570e5202e9b13e6096e7c25bb6bfc4d16235deca4f696ab40467abdb719bf
+              evidence:
+                tests:
+                    - trellis/internal/core::TestAuditIntegration_IT_33
+                recorded_at: "2026-08-30T19:44:51Z"
+        - id: AT-37
+          kind: acceptance_test
+          title: Audit acceptance
+          body: 'CLI and MCP against a repo with seeded rot: a done story whose test was renamed (violation), a test referencing a pruned spec id (violation), an unbound test and an unclaimed source file (both informational), a missing declared path (violation). Assert the report contents, the exit codes with and without violations, and the identical MCP report.'
+          covers:
+            - US-33.AC-1
+            - US-33.AC-2
+            - US-33.AC-3
+            - US-33.AC-4
+          approved_content_hash: 5fc421f07d66015a922fcad51ad046d608eeffc1b8cbf63b0b0cd068486cb7dd
+          approved_parent_hash: 81c71173cf75cfd451b2715eda72058ed5a5afa568ebec3ef1b822954317362a
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestAuditAcceptance_AT_37
+            recorded_at: "2026-08-30T19:44:51Z"
