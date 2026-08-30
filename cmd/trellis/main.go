@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"trellis/internal/board"
 	"trellis/internal/core"
 	"trellis/internal/mcpserver"
 	"trellis/internal/store"
@@ -36,6 +37,7 @@ Usage:
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
   trellis affected <project-id> <path>                         stories declaring a file/folder
+  trellis board <project-id> [-o <file>]                       write the HTML spec board
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -70,6 +72,8 @@ func run(args []string) error {
 		return cmdPrune(rest)
 	case "affected":
 		return cmdAffected(rest)
+	case "board":
+		return cmdBoard(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -320,6 +324,30 @@ func cmdLog(args []string) error {
 		e := events[i]
 		fmt.Printf("%s  %-15s %-8s %s\n", e.TS, e.Action, e.NodeID, e.Detail)
 	}
+	return nil
+}
+
+func cmdBoard(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: trellis board <project-id> [-o file]")
+	}
+	id, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("board", flag.ExitOnError)
+	out := fs.String("o", "trellis-board.html", "output file")
+	fs.Parse(rest)
+	e, st, err := engine(id)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	html, err := board.Render(e)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, []byte(html), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("board written to %s\n", *out)
 	return nil
 }
 

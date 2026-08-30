@@ -162,3 +162,76 @@ func TestAffectedCLIAcceptance_AT_16(t *testing.T) {
 		t.Fatalf("engine lookup backing the CLI: %v %v", hits, err)
 	}
 }
+
+// TestBoardCLIAcceptance_AT_18 proves AT-18 (US-15 "Board export"): the CLI
+// writes a self-contained board with statuses, coverage, markers, evidence
+// and both theme token blocks.
+func TestBoardCLIAcceptance_AT_18(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(story.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, story.ID, "at", "", []string{story.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, story.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{story.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(story.ID, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+
+	out := filepath.Join(t.TempDir(), "board.html")
+	if err := run([]string{"board", "p1", "-o", out}); err != nil {
+		t.Fatalf("board: %v", err)
+	}
+	html, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		story.ID, ">done<", at.ID, story.ID + ".AC-1", // story, status, coverage
+		"Test_AT_1",                  // evidence
+		"prefers-color-scheme: dark", // dark tokens
+		`data-theme="dark"`,          // explicit override block
+		"--ground: #F7F8F6",          // light tokens on bare :root
+		"gates open",
+	} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("board missing %q", want)
+		}
+	}
+}
