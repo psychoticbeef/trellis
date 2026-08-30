@@ -230,3 +230,115 @@ func TestBranchGateAcceptance_AT_21(t *testing.T) {
 		t.Fatalf("pre-commit hook missing branch gate:\n%s", hook)
 	}
 }
+
+func gateRepo(t *testing.T) (repo, wt string) {
+	t.Helper()
+	repo = t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	wt = filepath.Join(repo, ".trellis-worktrees", "US-1")
+	gitRun(t, repo, "worktree", "add", "-b", "feature/US-1", wt, "develop")
+	return repo, wt
+}
+
+// TestWorktreeGateAcceptance_AT_24 proves AT-24 (US-20 "Gates run where the
+// commit happens"): the gate verdict reflects the caller's worktree, with a
+// fallback to the main repo path from unrelated directories.
+func TestWorktreeGateAcceptance_AT_24(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo, wt := gateRepo(t)
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "test -f wt-marker"}); err != nil {
+		t.Fatal(err)
+	}
+	// The marker exists only in the story worktree.
+	if err := os.WriteFile(filepath.Join(wt, "wt-marker"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(wd) })
+	chdir := func(dir string) {
+		t.Helper()
+		if err := os.Chdir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// From the story worktree: passes (feedback reflects the agent's state).
+	chdir(wt)
+	if err := run([]string{"gate", "lint", "--project", "p1"}); err != nil {
+		t.Fatalf("gate from story worktree: %v", err)
+	}
+	// From the main worktree: fails (no marker there).
+	chdir(repo)
+	if err := run([]string{"gate", "lint", "--project", "p1"}); err == nil {
+		t.Fatal("gate from main worktree must fail without the marker")
+	}
+	// From an unrelated directory: falls back to the main repo path (fails).
+	chdir(t.TempDir())
+	if err := run([]string{"gate", "lint", "--project", "p1"}); err == nil {
+		t.Fatal("gate from foreign cwd must use the main repo path")
+	}
+	// Fallback positive case: marker in the main repo, foreign cwd passes.
+	if err := os.WriteFile(filepath.Join(repo, "wt-marker"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"gate", "lint", "--project", "p1"}); err != nil {
+		t.Fatalf("fallback gate: %v", err)
+	}
+}
+
+// TestGateDirIntegration_IT_20 proves IT-20 (US-20): dir resolution across
+// main worktree, story worktree and foreign cwd.
+func TestGateDirIntegration_IT_20(t *testing.T) {
+	repo, wt := gateRepo(t)
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(wd) })
+
+	eval := func(dir, want string) {
+		t.Helper()
+		if err := os.Chdir(dir); err != nil {
+			t.Fatal(err)
+		}
+		got := resolveGateDir(repo)
+		gotR, _ := filepath.EvalSymlinks(got)
+		wantR, _ := filepath.EvalSymlinks(want)
+		if gotR != wantR {
+			t.Fatalf("resolveGateDir from %s = %s, want %s", dir, got, want)
+		}
+	}
+	eval(repo, repo)
+	eval(wt, wt)
+	eval(t.TempDir(), repo)
+}
+
+// TestResolveGateDir_UT_21 proves UT-21 (DD-21 "resolveGateDir"): the three
+// resolution cases at unit level, including a nested subdirectory of a
+// worktree resolving to the worktree toplevel.
+func TestResolveGateDir_UT_21(t *testing.T) {
+	repo, wt := gateRepo(t)
+	sub := filepath.Join(wt, "deep", "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(wd) })
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := filepath.EvalSymlinks(resolveGateDir(repo))
+	want, _ := filepath.EvalSymlinks(wt)
+	if got != want {
+		t.Fatalf("nested cwd: %s, want %s", got, want)
+	}
+}
