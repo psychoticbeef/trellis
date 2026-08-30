@@ -14,7 +14,7 @@ import (
 // SetPaths declares which repo-relative files/folders realize a story. Paths
 // are metadata: they never touch the content hash, so pointer maintenance
 // cannot invalidate approvals. An empty list clears the declaration.
-func (e *Engine) SetPaths(storyID string, paths []string) ([]string, error) {
+func (e *Engine) setPathsUnlocked(storyID string, paths []string) ([]string, error) {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ const (
 )
 
 // DefineTerm creates or updates a glossary entry within the length limits.
-func (e *Engine) DefineTerm(term, definition string) error {
+func (e *Engine) defineTermUnlocked(term, definition string) error {
 	term = strings.TrimSpace(term)
 	definition = strings.TrimSpace(definition)
 	if term == "" || definition == "" {
@@ -124,7 +124,7 @@ func (e *Engine) DefineTerm(term, definition string) error {
 	return nil
 }
 
-func (e *Engine) DeleteTerm(term string) error {
+func (e *Engine) deleteTermUnlocked(term string) error {
 	if err := e.st.DeleteTerm(e.pid(), strings.TrimSpace(term)); err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (e *Engine) Terms() ([]store.TermDef, error) {
 const maxDescriptionLen = 200
 
 // SetDescription stores the GitHub-style one-line project description.
-func (e *Engine) SetDescription(desc string) error {
+func (e *Engine) setDescriptionUnlocked(desc string) error {
 	desc = strings.TrimSpace(desc)
 	if len(desc) > maxDescriptionLen {
 		return fmt.Errorf("description exceeds %d characters (%d) — one line, GitHub style: cut it down", maxDescriptionLen, len(desc))
@@ -151,4 +151,26 @@ func (e *Engine) SetDescription(desc string) error {
 	}
 	e.st.AppendEvent(e.pid(), "describe", "", desc)
 	return nil
+}
+
+func (e *Engine) SetPaths(storyID string, paths []string) ([]string, error) {
+	var out []string
+	err := e.locked(func() error {
+		var err error
+		out, err = e.setPathsUnlocked(storyID, paths)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) DefineTerm(term, definition string) error {
+	return e.locked(func() error { return e.defineTermUnlocked(term, definition) })
+}
+
+func (e *Engine) DeleteTerm(term string) error {
+	return e.locked(func() error { return e.deleteTermUnlocked(term) })
+}
+
+func (e *Engine) SetDescription(desc string) error {
+	return e.locked(func() error { return e.setDescriptionUnlocked(desc) })
 }

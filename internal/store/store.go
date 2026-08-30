@@ -17,7 +17,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 var ErrNotFound = errors.New("not found")
@@ -121,11 +122,17 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate description: %w", err)
 	}
+	// The arch singleton is a database invariant, not just an engine guard:
+	// even racing code paths cannot create two arch specs for one story.
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_arch_singleton ON nodes(project_id, parent_id) WHERE kind='arch'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate arch index: %w", err)
+	}
 	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS specs_fts USING fts5(project_id UNINDEXED, node_id UNINDEXED, body)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate fts: %w", err)
 	}
-	st := &Store{db: db}
+	st := &Store{db: db, path: path}
 	// Rebuild the index for stores that predate FTS.
 	var ftsRows, nodeRows int
 	db.QueryRow(`SELECT count(*) FROM specs_fts`).Scan(&ftsRows)
