@@ -456,3 +456,111 @@ func TestReleaseCLIAcceptance_AT_26(t *testing.T) {
 		t.Fatalf("incremental merge message wrong:\n%s", log)
 	}
 }
+
+// TestServedBoardsAcceptance_AT_27 proves AT-27 (US-23 "Boards served by the
+// MCP server"): the serve entrypoint brings up the board UI beside stdio,
+// redirects for one project, indexes several, and degrades to a notice when
+// the address is taken.
+func TestServedBoardsAcceptance_AT_27(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "one", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CreateNode(model.KindStory, "", "served story", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// Hold stdin open so the MCP stdio loop keeps running in the background.
+	rp, wp, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = rp
+	t.Cleanup(func() { os.Stdin = oldStdin; wp.Close() })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	go run([]string{"serve", "--project", "p1", "--board-addr", addr})
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	var res *http.Response
+	for i := 0; i < 50; i++ {
+		res, err = client.Get("http://" + addr + "/")
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("board never came up beside stdio: %v", err)
+	}
+	res.Body.Close()
+
+	// One project: root redirects straight to its board.
+	if res.StatusCode != http.StatusFound || res.Header.Get("Location") != "/p/p1/" {
+		t.Fatalf("root: %d -> %q, want redirect to /p/p1/", res.StatusCode, res.Header.Get("Location"))
+	}
+	res, err = client.Get("http://" + addr + "/p/p1/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), "served story") || !strings.Contains(string(body), "EventSource") {
+		t.Fatalf("board page incomplete:\n%.300s", body)
+	}
+
+	// Second project: root becomes an index listing both boards.
+	st2, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if err := st2.CreateProject(store.Project{ID: "p2", Name: "two", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = client.Get("http://" + addr + "/")
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), `href="/p/p1/"`) ||
+		!strings.Contains(string(body), `href="/p/p2/"`) {
+		t.Fatalf("index wrong (%d):\n%.300s", res.StatusCode, body)
+	}
+
+	// Occupied address: serve must keep running (we assert it by watching the
+	// second serve return only when stdin closes, not on the bind failure).
+	rp2, wp2, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = rp2
+	done := make(chan error, 1)
+	go func() { done <- run([]string{"serve", "--project", "p1", "--board-addr", addr}) }()
+	select {
+	case err := <-done:
+		t.Fatalf("serve exited on occupied board address: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	wp2.Close() // stdin EOF ends the stdio loop
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not exit after stdin EOF")
+	}
+}

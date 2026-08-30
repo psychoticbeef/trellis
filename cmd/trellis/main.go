@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,7 +34,7 @@ Usage:
   trellis projects                                             list projects
   trellis config <project-id> [flags]                          show or set config
       --repo <path> --base <branch> --lint <cmd> --test <cmd> --junit <glob>
-  trellis serve --project <project-id>                         run MCP server (stdio)
+  trellis serve --project <project-id> [--board-addr <addr>]   run MCP server (stdio) + board UI (default 127.0.0.1:7420, off disables)
   trellis tree <project-id> <story-id>                         print a story's spec tree
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
@@ -239,6 +241,7 @@ func orEmpty(s string) string {
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	project := fs.String("project", "", "project id (required)")
+	boardAddr := fs.String("board-addr", "127.0.0.1:7420", "board UI address; off disables")
 	fs.Parse(args)
 	if *project == "" {
 		return fmt.Errorf("serve requires --project")
@@ -248,6 +251,16 @@ func cmdServe(args []string) error {
 		return err
 	}
 	defer st.Close()
+	// The board UI rides along on stderr-only logging: stdout is the MCP
+	// protocol channel. A bind failure must never block the agent connection.
+	if *boardAddr != "off" {
+		if ln, err := net.Listen("tcp", *boardAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "trellis: board UI disabled (%v)\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "trellis: boards at http://%s\n", ln.Addr())
+			go http.Serve(ln, board.MultiHandler(st))
+		}
+	}
 	srv := mcpserver.New(e, version)
 	return srv.Run(context.Background(), &mcp.StdioTransport{})
 }
