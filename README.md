@@ -51,11 +51,12 @@ todo --refine--> refined --start--> in_progress --finish--> done
 
 Statuses can never be set directly; only transitions move them. Done trees
 are the durable context source: traceability from acceptance criteria to
-architecture to test evidence for everything that was built. They are
-immutable — every edit inside a done tree is rejected; cross-cutting changes
-mark dependent done specs stale without reopening them. When a feature leaves
-the product, `trellis prune` removes its tree whole. No war stories: content
-is either current context or deleted.
+architecture to test evidence for everything that was built. They stay
+editable so the context can track reality — honesty comes from hashes, not
+locks: every unreviewed change shows as a stale marker until re-approved,
+and done stories are never reopened automatically. When a feature leaves the
+product, `trellis prune` removes its tree whole. No war stories: content is
+either current context or deleted.
 
 ## Setup
 

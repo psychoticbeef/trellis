@@ -90,21 +90,6 @@ func (e *Engine) treeNodes(storyID string) ([]model.Node, error) {
 	return out, nil
 }
 
-// guardDoneTree rejects mutations inside a done story's tree. Done trees are
-// the durable context source (CC-4): context that can silently change is
-// worse than no context. Prune bypasses this deliberately — explicit removal
-// beats immutability.
-func (e *Engine) guardDoneTree(n model.Node) error {
-	story, ok, err := e.storyOf(n)
-	if err != nil {
-		return err
-	}
-	if ok && story.Status == model.StatusDone {
-		return fmt.Errorf("story %s is done: its spec tree is immutable context; prune the story or create a new story", story.ID)
-	}
-	return nil
-}
-
 // ---- node CRUD ----
 
 func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
@@ -127,9 +112,6 @@ func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, cover
 		}
 		if parent.Kind != wantParent {
 			return model.Node{}, fmt.Errorf("illegal parent: %s is a %s, but a %s must be child of a %s", parentID, parent.Kind, kind, wantParent)
-		}
-		if err := e.guardDoneTree(parent); err != nil {
-			return model.Node{}, err
 		}
 		if kind == model.KindArch {
 			siblings, err := e.st.ListChildren(e.pid(), parentID)
@@ -218,9 +200,6 @@ func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (m
 	if err != nil {
 		return model.Node{}, err
 	}
-	if err := e.guardDoneTree(n); err != nil {
-		return model.Node{}, err
-	}
 	if title == nil && body == nil && covers == nil {
 		return model.Node{}, fmt.Errorf("nothing to update: provide title, body and/or covers")
 	}
@@ -255,9 +234,6 @@ func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (m
 func (e *Engine) DeleteNode(id string) error {
 	n, err := e.st.GetNode(e.pid(), id)
 	if err != nil {
-		return err
-	}
-	if err := e.guardDoneTree(n); err != nil {
 		return err
 	}
 	children, err := e.st.ListChildren(e.pid(), id)
@@ -300,9 +276,6 @@ func (e *Engine) AddAC(storyID, given, when, then string) (model.AC, error) {
 	if story.Kind != model.KindStory {
 		return model.AC{}, fmt.Errorf("%s is a %s; acceptance criteria belong to stories", storyID, story.Kind)
 	}
-	if err := e.guardDoneTree(story); err != nil {
-		return model.AC{}, err
-	}
 	if strings.TrimSpace(given) == "" || strings.TrimSpace(when) == "" || strings.TrimSpace(then) == "" {
 		return model.AC{}, fmt.Errorf("given, when and then must all be non-empty")
 	}
@@ -331,11 +304,6 @@ func (e *Engine) AddAC(storyID, given, when, then string) (model.AC, error) {
 func (e *Engine) UpdateAC(acID string, given, when, then *string) (model.AC, error) {
 	ac, err := e.st.GetAC(e.pid(), acID)
 	if err != nil {
-		return model.AC{}, err
-	}
-	if story, err := e.st.GetNode(e.pid(), ac.StoryID); err != nil {
-		return model.AC{}, err
-	} else if err := e.guardDoneTree(story); err != nil {
 		return model.AC{}, err
 	}
 	if given != nil {
@@ -367,11 +335,6 @@ func (e *Engine) UpdateAC(acID string, given, when, then *string) (model.AC, err
 func (e *Engine) DeleteAC(acID string) error {
 	ac, err := e.st.GetAC(e.pid(), acID)
 	if err != nil {
-		return err
-	}
-	if story, err := e.st.GetNode(e.pid(), ac.StoryID); err != nil {
-		return err
-	} else if err := e.guardDoneTree(story); err != nil {
 		return err
 	}
 	// An AC referenced by an acceptance test must not silently vanish.
@@ -407,11 +370,7 @@ func (e *Engine) LinkDep(nodeID, targetID string) error {
 	if nodeID == targetID {
 		return fmt.Errorf("a node cannot depend on itself")
 	}
-	source, err := e.st.GetNode(e.pid(), nodeID)
-	if err != nil {
-		return err
-	}
-	if err := e.guardDoneTree(source); err != nil {
+	if _, err := e.st.GetNode(e.pid(), nodeID); err != nil {
 		return err
 	}
 	target, err := e.st.GetNode(e.pid(), targetID)

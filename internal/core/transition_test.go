@@ -221,11 +221,10 @@ func TestTransitionGuardMatrix_IT_5(t *testing.T) {
 	wantErr(t, err, `unknown action "warp"`)
 }
 
-// TestDoneTreeGuardIntegration_IT_7 proves IT-7 (US-7): a story driven to
-// done through the real flow rejects every mutation, accepts links onto its
-// members, shows honest stale markers after a cross-cutting edit without
-// leaving done, and prune still removes the tree.
-func TestDoneTreeGuardIntegration_IT_7(t *testing.T) {
+// TestLivingDoneTreeIntegration_IT_8 proves IT-8 (US-8): every mutation path
+// works on a done tree, staleness propagates, status stays done, re-approval
+// clears the markers.
+func TestLivingDoneTreeIntegration_IT_8(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
@@ -234,17 +233,14 @@ func TestDoneTreeGuardIntegration_IT_7(t *testing.T) {
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
 	p := e.Project
-	p.RepoPath = repo
-	p.LintCmd = "true"
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
 	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
-	p.JUnitGlob = "reports/*.xml"
 	if err := st.UpdateProject(p); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.ReloadProject(); err != nil {
 		t.Fatal(err)
 	}
-
 	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
 	approve(t, e, cc.ID)
 	tr := fullTree(t, e)
@@ -258,41 +254,52 @@ func TestDoneTreeGuardIntegration_IT_7(t *testing.T) {
 		}
 	}
 
-	// Done: every mutation path is rejected.
-	body := "x"
-	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err == nil ||
-		!strings.Contains(err.Error(), "immutable context") {
-		t.Fatalf("update on done tree: want immutability rejection, got %v", err)
+	// Every mutation path succeeds on the done tree.
+	body := "corrected"
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatalf("update on done tree: %v", err)
 	}
-	if _, err := e.AddAC(tr.story, "g", "w", "t"); err == nil ||
-		!strings.Contains(err.Error(), "immutable context") {
-		t.Fatalf("AC add on done story: want immutability rejection, got %v", err)
+	if _, err := e.AddAC(tr.story, "g2", "w2", "t2"); err != nil {
+		t.Fatalf("AC add on done story: %v", err)
+	}
+	extra := mustCreate(t, e, model.KindUnitTest, tr.dd, "extra", nil)
+	if err := e.DeleteNode(extra.ID); err != nil {
+		t.Fatalf("delete in done tree: %v", err)
+	}
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
 	}
 
-	// Cross-cutting edit: stale markers appear, status stays done.
-	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
-		t.Fatalf("cross-cutting specs stay editable: %v", err)
+	// Staleness propagated, status stayed done.
+	if got := status(t, e, tr.story); got != "done" {
+		t.Fatalf("status = %s, want done", got)
+	}
+	for _, id := range []string{tr.dd, tr.ut, tr.arch, tr.story} {
+		if n, _ := e.Node(id); n.Fresh {
+			t.Errorf("%s must be stale", id)
+		}
+	}
+
+	// Re-approval clears everything (top-down, deps re-read).
+	approve(t, e, cc.ID)
+	// Delete the extra AC again to restore coverage-independent freshness.
+	r, _ := e.Node(tr.story)
+	for _, ac := range r.ACs {
+		if ac.Given == "g2" {
+			if err := e.DeleteAC(ac.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, id := range []string{tr.story, tr.at, tr.arch, tr.it, tr.dd, tr.ut} {
+		approve(t, e, id)
+	}
+	for _, id := range []string{tr.story, tr.at, tr.arch, tr.it, tr.dd, tr.ut} {
+		if n, _ := e.Node(id); !n.Fresh {
+			t.Errorf("%s must be fresh after re-approval: %v", id, n.Problems)
+		}
 	}
 	if got := status(t, e, tr.story); got != "done" {
-		t.Fatalf("status = %s, done stories must not reopen", got)
-	}
-	arch, err := e.Node(tr.arch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if arch.Fresh {
-		t.Fatal("done arch spec must show a stale marker after dependency edit")
-	}
-
-	// Links onto done members work; prune still removes the tree after unlink.
-	other := fullTree(t, e)
-	if err := e.LinkDep(other.arch, tr.at); err != nil {
-		t.Fatalf("link onto done member: %v", err)
-	}
-	if err := e.UnlinkDep(other.arch, tr.at); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.Prune(tr.story); err != nil {
-		t.Fatalf("prune of done story: %v", err)
+		t.Fatalf("status = %s after re-approval, want done", got)
 	}
 }
