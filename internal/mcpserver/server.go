@@ -21,8 +21,9 @@ Workflow per story:
    arch spec, under it integration_test specs and detail_design nodes, under each
    detail design unit_test specs. Cross-cutting architecture lives in
    cross_cutting root nodes; reference them via link_dependency.
-3. Approve every node top-down with approve(node_id, content_hash). Hashes come
-   from get_node/get_tree — you must read a node to approve it.
+3. Approve: get_tree(story, full=true) then approve_tree(story, hashes) in one
+   batch — or node by node with approve(node_id, content_hash). Either way the
+   hashes come with the content: you read what you approve.
 4. transition(story, "refine") -> "start" (creates/checks out feature branch)
    -> implement -> "finish" (lint, tests, verifies every test spec has a
    passing test referencing its id, merges into the base branch).
@@ -61,7 +62,7 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Full content of one node incl. content_hash (needed for approve) and current hashes of its dependencies."},
 		s.getNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_tree",
-		Description: "Full spec tree of a story: nodes with hashes and freshness, AC coverage, and the exact list of problems blocking refine/start/finish."},
+		Description: "Full spec tree of a story: nodes with hashes and freshness, AC coverage, and the exact list of problems blocking refine/start/finish. Pass full=true to include every node's body — the read side of approve_tree."},
 		s.getTree)
 	mcp.AddTool(srv, &mcp.Tool{Name: "add_acceptance_criterion",
 		Description: "Add a structured acceptance criterion (given/when/then) to a story."},
@@ -72,6 +73,9 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_acceptance_criterion",
 		Description: "Delete an acceptance criterion. Blocked while an acceptance test covers it."},
 		s.deleteAC)
+	mcp.AddTool(srv, &mcp.Tool{Name: "approve_tree",
+		Description: "Approve a whole story tree in one call: pass the current content_hash of EVERY tree node (from get_tree full=true) and of every pinned dependency target via dep_hashes. All-or-nothing: any mismatch rejects the batch listing every problem."},
+		s.approveTree)
 	mcp.AddTool(srv, &mcp.Tool{Name: "approve",
 		Description: "Approve a node after reviewing it. content_hash must be the node's current hash (from get_node) — proof you read it. If the node has dependencies, pass dep_hashes {target_id: its current content_hash}. Parents must be approved before children."},
 		s.approve)
@@ -128,6 +132,17 @@ type idIn struct {
 
 type storyIn struct {
 	StoryID string `json:"story_id"`
+}
+
+type treeIn struct {
+	StoryID string `json:"story_id"`
+	Full    bool   `json:"full,omitempty" jsonschema:"include every node's body"`
+}
+
+type approveTreeIn struct {
+	StoryID   string            `json:"story_id"`
+	Hashes    map[string]string `json:"hashes" jsonschema:"current content_hash of every tree node"`
+	DepHashes map[string]string `json:"dep_hashes,omitempty" jsonschema:"current content_hash of every pinned dependency target"`
 }
 
 type addACIn struct {
@@ -229,12 +244,25 @@ func (s *Server) getNode(_ context.Context, _ *mcp.CallToolRequest, in idIn) (*m
 
 // getTree returns Out as `any`: TreeReport is recursive and the SDK cannot
 // infer a JSON schema for cyclic types, so the output schema is omitted.
-func (s *Server) getTree(_ context.Context, _ *mcp.CallToolRequest, in storyIn) (*mcp.CallToolResult, any, error) {
-	r, err := s.engine.Tree(in.StoryID)
+func (s *Server) getTree(_ context.Context, _ *mcp.CallToolRequest, in treeIn) (*mcp.CallToolResult, any, error) {
+	var r core.TreeReport
+	var err error
+	if in.Full {
+		r, err = s.engine.TreeFull(in.StoryID)
+	} else {
+		r, err = s.engine.Tree(in.StoryID)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	return nil, r, nil
+}
+
+func (s *Server) approveTree(_ context.Context, _ *mcp.CallToolRequest, in approveTreeIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.ApproveTree(in.StoryID, in.Hashes, in.DepHashes); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: in.StoryID + " tree approved"}, nil
 }
 
 func (s *Server) addAC(_ context.Context, _ *mcp.CallToolRequest, in addACIn) (*mcp.CallToolResult, okOut, error) {
