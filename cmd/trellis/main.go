@@ -38,6 +38,7 @@ Usage:
   trellis prune <project-id> <story-id>                        delete a done story's tree
   trellis affected <project-id> <path>                         stories declaring a file/folder
   trellis board <project-id> [-o <file>]                       write the HTML spec board
+  trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -74,6 +75,8 @@ func run(args []string) error {
 		return cmdAffected(rest)
 	case "board":
 		return cmdBoard(rest)
+	case "gate":
+		return cmdGate(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -146,17 +149,14 @@ func cmdInit(args []string) error {
 	if err := st.CreateProject(store.Project{ID: id, Name: *name, RepoPath: repoAbs, BaseBranch: *base}); err != nil {
 		return err
 	}
-	fmt.Printf(`project created: %s
-
-Next steps:
-1. Configure the gates:
+	fmt.Printf("project created: %s\n\nscaffolding %s:\n", id, repoAbs)
+	for _, msg := range scaffold(repoAbs, id) {
+		fmt.Println("  -", msg)
+	}
+	fmt.Printf(`
+Next step — configure the gates:
    trellis config %s --lint '<lint cmd>' --test '<test cmd producing junit xml>' --junit '<glob, e.g. reports/*.xml>'
-2. Register the MCP server in the repo (.mcp.json):
-   {"mcpServers": {"trellis": {"command": "trellis", "args": ["serve", "--project", "%s"]}}}
-3. Point the agent at it (AGENTS.md):
-   trellis-project: %s
-   (Specs, tickets and story state live in trellis; use its MCP tools. It is the single source of truth.)
-`, id, id, id, id)
+`, id)
 	return nil
 }
 
