@@ -393,10 +393,13 @@ func TestSearchAcceptance_AT_14(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("search failed: %v %s", err, text(res))
 	}
-	var hits []map[string]any
-	if err := json.Unmarshal([]byte(text(res)), &hits); err != nil {
+	var out struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &out); err != nil {
 		t.Fatalf("bad search output %q: %v", text(res), err)
 	}
+	hits := out.Hits
 	if len(hits) != 1 || hits[0]["id"] != dd || hits[0]["story"] != story {
 		t.Fatalf("mixed-case body search: %v", hits)
 	}
@@ -407,7 +410,9 @@ func TestSearchAcceptance_AT_14(t *testing.T) {
 	// AC-only match.
 	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
 		Arguments: map[string]any{"query": "wombat"}})
-	json.Unmarshal([]byte(text(res)), &hits)
+	out.Hits = nil
+	json.Unmarshal([]byte(text(res)), &out)
+	hits = out.Hits
 	if len(hits) != 1 || hits[0]["id"] != story {
 		t.Fatalf("AC search: %v", hits)
 	}
@@ -415,8 +420,8 @@ func TestSearchAcceptance_AT_14(t *testing.T) {
 	// No match: empty list, not an error.
 	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
 		Arguments: map[string]any{"query": "nothing-matches-this"}})
-	if res.IsError || strings.TrimSpace(text(res)) != "[]" {
-		t.Fatalf("no-match must be empty list: err=%v %q", res.IsError, text(res))
+	if res.IsError || strings.TrimSpace(text(res)) != `{"hits":[]}` {
+		t.Fatalf("no-match must be an empty envelope: err=%v %q", res.IsError, text(res))
 	}
 
 	// Overview is the complete product map.
@@ -441,11 +446,13 @@ func TestFTSSearchAcceptance_AT_23(t *testing.T) {
 		if err != nil || res.IsError {
 			t.Fatalf("search %q: %v %s", q, err, text(res))
 		}
-		var hits []map[string]any
-		if err := json.Unmarshal([]byte(text(res)), &hits); err != nil {
+		var out struct {
+			Hits []map[string]any `json:"hits"`
+		}
+		if err := json.Unmarshal([]byte(text(res)), &out); err != nil {
 			t.Fatalf("bad output %q: %v", text(res), err)
 		}
-		return hits
+		return out.Hits
 	}
 
 	strong := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "quorum snapshot",
@@ -746,4 +753,78 @@ func TestConcurrencyAcceptance_AT_31(t *testing.T) {
 		t.Fatal("get_overview blocked by the mutation lock")
 	}
 	unlock()
+}
+
+// TestSchemaInteropAcceptance_AT_34 proves AT-34 (US-30 "Interoperable MCP
+// output schemas"): every declared output schema is object-typed (the lint
+// that guards regressions), and the wrapped tools return their envelopes.
+func TestSchemaInteropAcceptance_AT_34(t *testing.T) {
+	cs := client(t)
+	tools, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) == 0 {
+		t.Fatal("no tools listed")
+	}
+	for _, tool := range tools.Tools {
+		if tool.OutputSchema == nil {
+			continue // omitted schema is fine; a wrong-typed one is not
+		}
+		blob, _ := json.Marshal(tool.OutputSchema)
+		var schema struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(blob, &schema); err != nil {
+			t.Fatalf("tool %s: unparsable output schema: %v", tool.Name, err)
+		}
+		if schema.Type != "object" {
+			t.Errorf("tool %s: outputSchema.type = %q, want object — strict MCP clients reject the whole listing", tool.Name, schema.Type)
+		}
+	}
+
+	// Envelope shapes.
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "envelope probe"})["id"].(string)
+	call(t, cs, "set_paths", map[string]any{"story_id": story, "paths": []string{"pkg"}})
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+		Arguments: map[string]any{"query": "envelope probe"}})
+	if err != nil || res.IsError {
+		t.Fatalf("search: %v %s", err, text(res))
+	}
+	var sOut struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &sOut); err != nil || len(sOut.Hits) != 1 {
+		t.Fatalf("search envelope: %v %q", err, text(res))
+	}
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "specs_for_path",
+		Arguments: map[string]any{"path": "pkg/x.go"}})
+	if err != nil || res.IsError {
+		t.Fatalf("specs_for_path: %v %s", err, text(res))
+	}
+	var pOut struct {
+		Stories []map[string]any `json:"stories"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &pOut); err != nil || len(pOut.Stories) != 1 {
+		t.Fatalf("stories envelope: %v %q", err, text(res))
+	}
+}
+
+// TestSchemaLintIntegration_IT_30 proves IT-30 (US-30): envelope roundtrips
+// with hits present and empty — empty results are empty arrays, never null.
+func TestSchemaLintIntegration_IT_30(t *testing.T) {
+	cs := client(t)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "specs_for_path",
+		Arguments: map[string]any{"path": "nowhere/x.go"}})
+	if err != nil || res.IsError {
+		t.Fatalf("specs_for_path: %v %s", err, text(res))
+	}
+	if got := strings.TrimSpace(text(res)); got != `{"stories":[]}` {
+		t.Fatalf("empty stories envelope = %q", got)
+	}
+	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+		Arguments: map[string]any{"query": "zzz-nothing"}})
+	if got := strings.TrimSpace(text(res)); got != `{"hits":[]}` {
+		t.Fatalf("empty hits envelope = %q", got)
+	}
 }
