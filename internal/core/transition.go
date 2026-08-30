@@ -190,6 +190,17 @@ func (e *Engine) finish(story model.Node) (string, error) {
 	if problems := testreport.Verify(specIDs, cases); len(problems) > 0 {
 		return "", fmt.Errorf("finish blocked: test evidence incomplete for %s:\n- %s", story.ID, strings.Join(problems, "\n- "))
 	}
+	// Verification passed: put the proving tests on record, spec by spec.
+	// Latest run replaces earlier evidence — current state, not history.
+	for _, id := range specIDs {
+		var names []string
+		for _, c := range testreport.Match(id, cases) {
+			names = append(names, c.FullName())
+		}
+		if err := e.st.SetEvidence(e.pid(), id, names); err != nil {
+			return "", err
+		}
+	}
 	if testErr != nil {
 		return "", fmt.Errorf("finish blocked: test command exited non-zero (%s) although all referenced specs pass — other tests are failing:\n%s", e.Project.TestCmd, tail(testOut, 40))
 	}

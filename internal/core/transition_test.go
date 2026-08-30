@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"trellis/internal/core"
 	"trellis/internal/model"
 )
 
@@ -515,5 +516,68 @@ func TestPathPointerIntegration_IT_13(t *testing.T) {
 	hits, err := e.StoriesForPath("pkg/auth/auth.go")
 	if err != nil || len(hits) != 1 || hits[0].ID != tr.story || hits[0].Status != "done" {
 		t.Fatalf("reverse lookup: %v %v", hits, err)
+	}
+}
+
+// TestEvidenceIntegration_IT_14 proves IT-14 (US-14): finish writes evidence
+// for exactly the tree's test specs, re-runs replace rows, other stories stay
+// untouched, reports render the records.
+func TestEvidenceIntegration_IT_14(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	other := fullTree(t, e)
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(tr.story, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+
+	// Exactly the tree's test specs carry evidence; arch/dd/story do not.
+	for _, id := range []string{tr.at, tr.it, tr.ut} {
+		n, _ := e.Node(id)
+		if n.Evidence == nil || len(n.Evidence.Tests) == 0 {
+			t.Fatalf("%s missing evidence after finish", id)
+		}
+	}
+	if n, _ := e.Node(tr.arch); n.Evidence != nil {
+		t.Fatal("arch must not carry evidence")
+	}
+	if n, _ := e.Node(other.ut); n.Evidence != nil {
+		t.Fatal("other story's specs must stay untouched")
+	}
+
+	// The tree report renders evidence on test specs.
+	tree, err := e.Tree(tr.story)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	var walk func(n core.TreeNode)
+	walk = func(n core.TreeNode) {
+		if n.ID == tr.ut && n.Evidence != nil && len(n.Evidence.Tests) > 0 {
+			found = true
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(tree.Story)
+	if !found {
+		t.Fatal("tree report missing evidence on the unit test spec")
 	}
 }
