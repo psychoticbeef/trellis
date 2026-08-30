@@ -69,6 +69,7 @@ type termView struct {
 
 type page struct {
 	Project  string
+	Desc     string
 	Stamp    string
 	Stories  []storyView
 	CCs      []ccView
@@ -153,7 +154,7 @@ func Render(e *core.Engine) (string, error) {
 		return "", err
 	}
 	tf := newTermifier(overview.Glossary)
-	p := page{Project: e.Project.ID, Stamp: time.Now().Format("2006-01-02 15:04")}
+	p := page{Project: e.Project.ID, Desc: e.Project.Description, Stamp: time.Now().Format("2006-01-02 15:04")}
 	for _, td := range overview.Glossary {
 		p.Glossary = append(p.Glossary, termView{Term: td.Term, Anchor: anchorFor(td.Term), Definition: td.Definition})
 	}
@@ -264,6 +265,7 @@ body { background: var(--ground); color: var(--ink); margin: 0; font: 16px/1.55 
 .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.86em; }
 h1 { font-family: Bitter, Georgia, serif; font-size: 1.9rem; margin: 0; }
 h1 span { color: var(--accent); }
+.desc { color: var(--ink); margin: 8px 0 0; max-width: 65ch; }
 .sub { color: var(--muted); margin: 4px 0 28px; font-size: 0.9rem; }
 h2 { font-family: Bitter, Georgia, serif; font-size: 1.25rem; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 22px 24px; margin: 0 0 22px; }
@@ -299,6 +301,7 @@ a.term:hover { color: var(--accent); }
 </style></head><body>
 <div class="wrap">
 <h1><span>trellis</span> board</h1>
+{{if .Desc}}<p class="desc">{{.Desc}}</p>{{end}}
 <p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
 <nav class="chips">
 {{range .Stories}}<a class="chip" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span></a>

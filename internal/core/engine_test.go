@@ -952,3 +952,26 @@ func TestSearchRanking_IT_19(t *testing.T) {
 		t.Fatalf("only the last term is a prefix: %+v", hits)
 	}
 }
+
+// TestDescriptionIntegration_IT_24 proves IT-24 (US-24 "Project
+// description"): engine set/overwrite with limit, overview inclusion.
+func TestDescriptionIntegration_IT_24(t *testing.T) {
+	e := newMemEngine(t)
+	if err := e.SetDescription("first version"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetDescription("deterministic spec tracking for LLM-driven development"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetDescription(strings.Repeat("x", 201)); err == nil ||
+		!strings.Contains(err.Error(), "exceeds 200 characters") {
+		t.Fatalf("limit not enforced: %v", err)
+	}
+	o, err := e.Overview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Description != "deterministic spec tracking for LLM-driven development" {
+		t.Fatalf("overview description = %q", o.Description)
+	}
+}

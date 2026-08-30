@@ -282,3 +282,34 @@ func TestMultiBoardIntegration_IT_23(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 }
+
+// TestDescriptionSurfaces_IT_24 proves the board half of IT-24 (US-24):
+// board header and index card carry the description.
+func TestDescriptionSurfaces_IT_24(t *testing.T) {
+	e, st := liveSetup(t)
+	p := e.Project
+	p.Description = "deterministic spec tracking"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	html, err := Render(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, `<p class="desc">deterministic spec tracking</p>`) {
+		t.Fatal("board header missing description")
+	}
+	if err := st.CreateProject(store.Project{ID: "p2", Name: "two", Description: "second thing", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	projects, _ := st.ListProjects()
+	page := indexHTML(projects)
+	for _, want := range []string{"deterministic spec tracking", "second thing"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("index missing %q", want)
+		}
+	}
+}
