@@ -1045,3 +1045,82 @@ func TestBatchValidation_UT_27(t *testing.T) {
 		t.Fatalf("sequencing approve: %v", err)
 	}
 }
+
+// TestNextSplit_UT_36 proves UT-36 (DD-36 "NextStories query"): the
+// candidate/blocked split over fabricated statuses.
+func TestNextSplit_UT_36(t *testing.T) {
+	e, st := newEngineStore(t)
+	a := fullTree(t, e) // stays todo -> never a candidate
+	b := fullTree(t, e)
+	c := fullTree(t, e)
+	d := fullTree(t, e)
+	for _, s := range []string{b.story, c.story, d.story} {
+		if _, err := e.Transition(s, "refine"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// c waits on a (todo) and on d; d refined+free; done story never listed.
+	if err := e.LinkDep(c.story, a.story); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.LinkDep(c.story, d.story); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeStatus("p1", a.story, "done"); err != nil { // a done -> only d blocks c
+		t.Fatal(err)
+	}
+
+	candidates, blocked, err := e.NextStories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0].ID != b.story || candidates[1].ID != d.story {
+		t.Fatalf("candidates: %+v", candidates)
+	}
+	if len(blocked) != 1 || blocked[0].ID != c.story ||
+		len(blocked[0].WaitingOn) != 1 || blocked[0].WaitingOn[0] != d.story+" (refined)" {
+		t.Fatalf("blocked: %+v", blocked)
+	}
+
+	// done/in_progress never candidates.
+	if err := st.SetNodeStatus("p1", b.story, "in_progress"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, _, _ = e.NextStories()
+	for _, cand := range candidates {
+		if cand.ID == b.story {
+			t.Fatal("in_progress story listed as candidate")
+		}
+	}
+}
+
+// TestNextIntegration_IT_35 proves IT-35 (US-35): finishing a prerequisite
+// moves the dependent into the candidates; empty backlog answers empty.
+func TestNextIntegration_IT_35(t *testing.T) {
+	e, st := newEngineStore(t)
+	c, b, err := e.NextStories()
+	if err != nil || len(c) != 0 || len(b) != 0 {
+		t.Fatalf("empty backlog: %v %v %v", c, b, err)
+	}
+	pre := fullTree(t, e)
+	dep := fullTree(t, e)
+	if err := e.LinkDep(dep.story, pre.story); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{pre.story, dep.story} {
+		if _, err := e.Transition(s, "refine"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, blocked, _ := e.NextStories()
+	if len(blocked) != 1 || blocked[0].ID != dep.story {
+		t.Fatalf("blocked before prerequisite done: %+v", blocked)
+	}
+	if err := st.SetNodeStatus("p1", pre.story, "done"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, blocked, _ := e.NextStories()
+	if len(blocked) != 0 || len(candidates) != 1 || candidates[0].ID != dep.story {
+		t.Fatalf("after prerequisite done: %+v %+v", candidates, blocked)
+	}
+}
