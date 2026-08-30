@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"trellis/internal/core"
+	"trellis/internal/model"
 	"trellis/internal/store"
 )
 
@@ -17,7 +19,8 @@ func TestScaffoldUnit_UT_17(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
 
-	msgs := strings.Join(scaffold(repo, "p1"), "\n")
+	scaffMsgs, _ := scaffold(repo, "p1")
+	msgs := strings.Join(scaffMsgs, "\n")
 	for _, want := range []string{".mcp.json created", "AGENTS.md created", "pre-commit created", "pre-push created"} {
 		if !strings.Contains(msgs, want) {
 			t.Errorf("scaffold messages missing %q:\n%s", want, msgs)
@@ -43,7 +46,8 @@ func TestScaffoldUnit_UT_17(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("custom"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	msgs = strings.Join(scaffold(repo, "p2"), "\n")
+	scaffMsgs2, _ := scaffold(repo, "p2")
+	msgs = strings.Join(scaffMsgs2, "\n")
 	if strings.Contains(msgs, "created") {
 		t.Fatalf("second scaffold must not create anything:\n%s", msgs)
 	}
@@ -340,5 +344,172 @@ func TestResolveGateDir_UT_21(t *testing.T) {
 	want, _ := filepath.EvalSymlinks(wt)
 	if got != want {
 		t.Fatalf("nested cwd: %s, want %s", got, want)
+	}
+}
+
+// TestBootstrapUnit_UT_30 proves UT-30 (DD-31 "Scaffold commit mechanics"):
+// ensureIgnoreLine matrix, created-files reporting excluding hooks, warning
+// construction off-PATH.
+func TestBootstrapUnit_UT_30(t *testing.T) {
+	repo := t.TempDir()
+
+	// Create.
+	changed, msg := ensureIgnoreLine(repo)
+	if !changed || !strings.Contains(msg, "created") {
+		t.Fatalf("create: %v %q", changed, msg)
+	}
+	// No-op when present.
+	changed, msg = ensureIgnoreLine(repo)
+	if changed || !strings.Contains(msg, "already ignores") {
+		t.Fatalf("no-op: %v %q", changed, msg)
+	}
+	// Append preserving content (also without trailing newline).
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("node_modules/"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, msg = ensureIgnoreLine(repo)
+	if !changed || !strings.Contains(msg, "amended") {
+		t.Fatalf("append: %v %q", changed, msg)
+	}
+	data, _ := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if string(data) != "node_modules/\n.trellis-worktrees/\n" {
+		t.Fatalf("append content: %q", data)
+	}
+
+	// Created files exclude hooks; repo files included.
+	repo2 := t.TempDir()
+	gitRun(t, repo2, "init", "-b", "develop")
+	_, created := scaffold(repo2, "p1")
+	joined := strings.Join(created, ",")
+	for _, want := range []string{".gitignore", ".mcp.json", "AGENTS.md"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("created files missing %s: %v", want, created)
+		}
+	}
+	if strings.Contains(joined, ".git/") {
+		t.Fatalf("hooks must not be in the commit list: %v", created)
+	}
+
+	// Off-PATH warning.
+	t.Setenv("PATH", t.TempDir())
+	msgs, _ := scaffold(t.TempDir(), "p1")
+	if !strings.Contains(strings.Join(msgs, "\n"), "not on PATH") {
+		t.Fatalf("missing PATH warning: %v", msgs)
+	}
+}
+
+// TestBootstrapIntegration_IT_29 proves IT-29 (US-29): wiring commit
+// contents, gitignore matrix through init, no-commit cases.
+func TestBootstrapIntegration_IT_29(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	// Unrelated dirt must not be swept into the wiring commit.
+	if err := os.WriteFile(filepath.Join(repo, "wip.txt"), []byte("w"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"init", "--name", "demo", "--repo", repo}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	subject := gitRun(t, repo, "log", "-1", "--pretty=%s")
+	if subject != "trellis init: repo wiring" {
+		t.Fatalf("wiring commit missing, HEAD is %q", subject)
+	}
+	files := gitRun(t, repo, "show", "--name-only", "--pretty=format:", "HEAD")
+	for _, want := range []string{".gitignore", ".mcp.json", "AGENTS.md"} {
+		if !strings.Contains(files, want) {
+			t.Errorf("wiring commit missing %s:\n%s", want, files)
+		}
+	}
+	if strings.Contains(files, "wip.txt") {
+		t.Fatal("unrelated dirt swept into the wiring commit")
+	}
+	ignore, _ := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if !strings.Contains(string(ignore), "node_modules/") || !strings.Contains(string(ignore), ".trellis-worktrees/") {
+		t.Fatalf("gitignore content: %q", ignore)
+	}
+
+	// Second init: no new commit.
+	head := gitRun(t, repo, "rev-parse", "HEAD")
+	if err := run([]string{"init", "--name", "demo2", "--repo", repo}); err != nil {
+		t.Fatalf("second init: %v", err)
+	}
+	if got := gitRun(t, repo, "rev-parse", "HEAD"); got != head {
+		t.Fatal("second init created a commit")
+	}
+
+	// No git repo: init still succeeds, nothing committed.
+	bare := t.TempDir()
+	if err := run([]string{"init", "--name", "demo3", "--repo", bare}); err != nil {
+		t.Fatalf("init without git: %v", err)
+	}
+}
+
+// TestBootstrapAcceptance_AT_33 proves AT-33 (US-29 "Init wires and commits
+// its own scaffold"): one-step bootstrap leaving a clean worktree and an
+// immediately startable project.
+func TestBootstrapAcceptance_AT_33(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"),
+		[]byte(`<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+
+	if err := run([]string{"init", "--name", "demo", "--repo", repo}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// Clean worktree right after init — the wiring commit covered everything.
+	if dirt := gitRun(t, repo, "status", "--porcelain"); dirt != "" {
+		t.Fatalf("worktree dirty after init:\n%s", dirt)
+	}
+
+	// start works immediately: ignore entry is in place, no manual editing.
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	projects, _ := st.ListProjects()
+	if len(projects) != 1 {
+		t.Fatalf("projects: %v", projects)
+	}
+	e, err := core.NewEngine(st, projects[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(s.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.Transition(s.ID, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(s.ID, "start"); err != nil {
+		t.Fatalf("start immediately after init: %v", err)
 	}
 }
