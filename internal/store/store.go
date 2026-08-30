@@ -87,6 +87,10 @@ CREATE TABLE IF NOT EXISTS coverage (
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (project_id, file)
 );
+CREATE TABLE IF NOT EXISTS coverage_meta (
+	project_id     TEXT PRIMARY KEY,
+	prev_total_pct REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS glossary (
 	project_id TEXT NOT NULL,
 	term       TEXT NOT NULL,
@@ -590,6 +594,24 @@ func (s *Store) SetCoverage(projectID string, rows []CoverageRow) error {
 		}
 	}
 	return nil
+}
+
+// SetCoveragePrevTotal remembers the outgoing snapshot's overall percentage
+// — one scalar, no history.
+func (s *Store) SetCoveragePrevTotal(projectID string, pct float64) error {
+	_, err := s.db.Exec(`INSERT INTO coverage_meta (project_id, prev_total_pct) VALUES (?,?)
+		ON CONFLICT(project_id) DO UPDATE SET prev_total_pct=excluded.prev_total_pct`, projectID, pct)
+	return err
+}
+
+// CoveragePrevTotal returns the remembered percentage, ok=false when none.
+func (s *Store) CoveragePrevTotal(projectID string) (float64, bool, error) {
+	var pct float64
+	err := s.db.QueryRow(`SELECT prev_total_pct FROM coverage_meta WHERE project_id=?`, projectID).Scan(&pct)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return pct, err == nil, err
 }
 
 func (s *Store) ListCoverage(projectID string) ([]CoverageRow, error) {

@@ -399,6 +399,7 @@ type CCSummary struct {
 
 type CoverageSummary struct {
 	TotalPct   float64        `json:"total_pct"`
+	DeltaPct   *float64       `json:"delta_pct,omitempty"` // vs the previous snapshot; nil on the first
 	RecordedAt string         `json:"recorded_at"`
 	Gaps       []CoverageFile `json:"gaps"`
 }
@@ -434,6 +435,10 @@ func (e *Engine) Overview() (Overview, error) {
 		}
 		total, worst := testreport.Summarize(files, 10)
 		cs := &CoverageSummary{TotalPct: total, RecordedAt: rows[0].RecordedAt, Gaps: []CoverageFile{}}
+		if prev, ok, err := e.st.CoveragePrevTotal(e.pid()); err == nil && ok {
+			d := total - prev
+			cs.DeltaPct = &d
+		}
 		for _, w := range worst {
 			if w.Pct() < 100 {
 				cs.Gaps = append(cs.Gaps, CoverageFile{File: w.Path, Pct: w.Pct()})
