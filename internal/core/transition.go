@@ -251,11 +251,26 @@ func (e *Engine) recordCoverage(root string) string {
 	for _, f := range files {
 		rows = append(rows, store.CoverageRow{File: f.Path, Covered: f.Covered, Total: f.Total})
 	}
+	// Remember the outgoing snapshot's total before it is replaced.
+	prevKnown := false
+	var prev float64
+	if old, err := e.st.ListCoverage(e.pid()); err == nil && len(old) > 0 {
+		oldFiles := make([]testreport.FileCov, 0, len(old))
+		for _, r := range old {
+			oldFiles = append(oldFiles, testreport.FileCov{Path: r.File, Covered: r.Covered, Total: r.Total})
+		}
+		prev, _ = testreport.Summarize(oldFiles, 0)
+		prevKnown = true
+		_ = e.st.SetCoveragePrevTotal(e.pid(), prev)
+	}
 	if err := e.st.SetCoverage(e.pid(), rows); err != nil {
 		return fmt.Sprintf("; coverage not recorded (%v)", err)
 	}
 	total, worst := testreport.Summarize(files, 3)
 	note := fmt.Sprintf("; coverage %.1f%%", total)
+	if prevKnown {
+		note += fmt.Sprintf(" (%+.1f)", total-prev)
+	}
 	var gaps []string
 	for _, w := range worst {
 		if w.Pct() < 100 {
