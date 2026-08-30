@@ -91,9 +91,21 @@ func (e *Engine) treeNodes(storyID string) ([]model.Node, error) {
 	return out, nil
 }
 
+// locked serializes a mutation against every other process and session
+// working on this project. Internal helpers never re-acquire; only the
+// public mutating methods wrap themselves.
+func (e *Engine) locked(fn func() error) error {
+	unlock, err := e.st.LockProject(e.pid())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 // ---- node CRUD ----
 
-func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
+func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
 	if !model.ValidKind(kind) {
 		return model.Node{}, fmt.Errorf("unknown kind %q; valid kinds: story, acceptance_test, arch, integration_test, detail_design, unit_test, cross_cutting", kind)
 	}
@@ -196,7 +208,7 @@ func (e *Engine) validateCovers(storyID string, covers []string) error {
 // UpdateNode applies a partial content update. Nil fields stay unchanged.
 // Approval invalidation is implicit: the content hash changes, so the node is
 // no longer approved and all children/dependents go stale.
-func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (model.Node, error) {
+func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]string) (model.Node, error) {
 	n, err := e.st.GetNode(e.pid(), id)
 	if err != nil {
 		return model.Node{}, err
@@ -232,7 +244,7 @@ func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (m
 	return e.st.GetNode(e.pid(), n.ID)
 }
 
-func (e *Engine) DeleteNode(id string) error {
+func (e *Engine) deletenodeUnlocked(id string) error {
 	n, err := e.st.GetNode(e.pid(), id)
 	if err != nil {
 		return err
@@ -269,7 +281,7 @@ func (e *Engine) DeleteNode(id string) error {
 
 // ---- acceptance criteria ----
 
-func (e *Engine) AddAC(storyID, given, when, then string) (model.AC, error) {
+func (e *Engine) addacUnlocked(storyID, given, when, then string) (model.AC, error) {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return model.AC{}, err
@@ -302,7 +314,7 @@ func (e *Engine) AddAC(storyID, given, when, then string) (model.AC, error) {
 	return ac, nil
 }
 
-func (e *Engine) UpdateAC(acID string, given, when, then *string) (model.AC, error) {
+func (e *Engine) updateacUnlocked(acID string, given, when, then *string) (model.AC, error) {
 	ac, err := e.st.GetAC(e.pid(), acID)
 	if err != nil {
 		return model.AC{}, err
@@ -333,7 +345,7 @@ func (e *Engine) UpdateAC(acID string, given, when, then *string) (model.AC, err
 	return ac, nil
 }
 
-func (e *Engine) DeleteAC(acID string) error {
+func (e *Engine) deleteacUnlocked(acID string) error {
 	ac, err := e.st.GetAC(e.pid(), acID)
 	if err != nil {
 		return err
@@ -367,7 +379,7 @@ func (e *Engine) DeleteAC(acID string) error {
 
 // ---- dependencies (cross-cutting references) ----
 
-func (e *Engine) LinkDep(nodeID, targetID string) error {
+func (e *Engine) linkdepUnlocked(nodeID, targetID string) error {
 	if nodeID == targetID {
 		return fmt.Errorf("a node cannot depend on itself")
 	}
@@ -449,7 +461,7 @@ func (e *Engine) sequencingCycle(from, to string) (string, error) {
 	return walk(to)
 }
 
-func (e *Engine) UnlinkDep(nodeID, targetID string) error {
+func (e *Engine) unlinkdepUnlocked(nodeID, targetID string) error {
 	if err := e.st.UnlinkDep(e.pid(), nodeID, targetID); err != nil {
 		return err
 	}
@@ -463,7 +475,7 @@ func (e *Engine) UnlinkDep(nodeID, targetID string) error {
 // content it reviewed (proof of reading); for every dependency it must pass
 // the hash of the dependency target it reviewed. Approval re-pins all
 // dependency edges.
-func (e *Engine) Approve(nodeID, contentHash string, depHashes map[string]string) error {
+func (e *Engine) approveUnlocked(nodeID, contentHash string, depHashes map[string]string) error {
 	n, err := e.st.GetNode(e.pid(), nodeID)
 	if err != nil {
 		return err
@@ -608,4 +620,64 @@ func short(hash string) string {
 		return hash[:12]
 	}
 	return hash
+}
+
+func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
+	var out model.Node
+	err := e.locked(func() error {
+		var err error
+		out, err = e.createnodeUnlocked(kind, parentID, title, body, covers)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (model.Node, error) {
+	var out model.Node
+	err := e.locked(func() error {
+		var err error
+		out, err = e.updatenodeUnlocked(id, title, body, covers)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) AddAC(storyID, given, when, then string) (model.AC, error) {
+	var out model.AC
+	err := e.locked(func() error {
+		var err error
+		out, err = e.addacUnlocked(storyID, given, when, then)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) UpdateAC(acID string, given, when, then *string) (model.AC, error) {
+	var out model.AC
+	err := e.locked(func() error {
+		var err error
+		out, err = e.updateacUnlocked(acID, given, when, then)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) DeleteNode(id string) error {
+	return e.locked(func() error { return e.deletenodeUnlocked(id) })
+}
+
+func (e *Engine) DeleteAC(acID string) error {
+	return e.locked(func() error { return e.deleteacUnlocked(acID) })
+}
+
+func (e *Engine) LinkDep(nodeID, targetID string) error {
+	return e.locked(func() error { return e.linkdepUnlocked(nodeID, targetID) })
+}
+
+func (e *Engine) UnlinkDep(nodeID, targetID string) error {
+	return e.locked(func() error { return e.unlinkdepUnlocked(nodeID, targetID) })
+}
+
+func (e *Engine) Approve(nodeID, contentHash string, depHashes map[string]string) error {
+	return e.locked(func() error { return e.approveUnlocked(nodeID, contentHash, depHashes) })
 }
