@@ -1191,3 +1191,83 @@ func releaseUnwindScenario(t *testing.T) {
 		t.Fatalf("release after unwind: %v", err)
 	}
 }
+
+// TestCoverageIntegration_IT_32 proves IT-32 (US-32 "Coverage visibility"):
+// finish records LCOV and coverprofile snapshots with replacement, broken
+// input degrades to a notice, overview carries the summary.
+func TestCoverageIntegration_IT_32(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1", "AT-2", "IT-2", "UT-2", "AT-3", "IT-3", "UT-3"))
+	writeFile(t, filepath.Join(repo, "cov-src.txt"), "TN:\nSF:src/a.ts\nDA:1,1\nDA:2,0\nend_of_record\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml && cp cov-src.txt reports/cov.data"
+	p.CoverageGlob = "reports/cov.data"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	drive := func(tr tree) string {
+		t.Helper()
+		for _, verb := range []string{"refine", "start"} {
+			if _, err := e.Transition(tr.story, verb); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wt := wtPath(repo, tr.story)
+		writeFile(t, filepath.Join(wt, tr.story+".txt"), "x")
+		git(t, wt, "add", ".")
+		git(t, wt, "commit", "-m", "impl")
+		msg, err := e.Transition(tr.story, "finish")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msg
+	}
+
+	// LCOV snapshot + finish note.
+	msg := drive(fullTree(t, e))
+	if !strings.Contains(msg, "coverage 50.0%") || !strings.Contains(msg, "src/a.ts 50%") {
+		t.Fatalf("finish message missing coverage: %s", msg)
+	}
+	o, err := e.Overview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Coverage == nil || o.Coverage.TotalPct != 50 || len(o.Coverage.Gaps) != 1 {
+		t.Fatalf("overview coverage: %+v", o.Coverage)
+	}
+
+	// Replacement with a Go coverprofile.
+	writeFile(t, filepath.Join(repo, "cov-src.txt"), "mode: set\npkg/z.go:1.1,2.2 4 1\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "switch format")
+	drive(fullTree(t, e))
+	o, _ = e.Overview()
+	if o.Coverage == nil || o.Coverage.TotalPct != 100 || len(o.Coverage.Gaps) != 0 {
+		t.Fatalf("replaced snapshot: %+v", o.Coverage)
+	}
+	rows, _ := st.ListCoverage("p1")
+	if len(rows) != 1 || rows[0].File != "pkg/z.go" {
+		t.Fatalf("replacement rows: %+v", rows)
+	}
+
+	// Broken input: non-blocking notice, snapshot untouched.
+	writeFile(t, filepath.Join(repo, "cov-src.txt"), "total garbage")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "break coverage")
+	msg = drive(fullTree(t, e))
+	if !strings.Contains(msg, "coverage not recorded") {
+		t.Fatalf("missing non-blocking notice: %s", msg)
+	}
+	if got := status(t, e, "US-3"); got != "done" {
+		t.Fatalf("finish must succeed despite broken coverage, story = %s", got)
+	}
+}
