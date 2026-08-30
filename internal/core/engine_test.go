@@ -880,3 +880,51 @@ func TestPathMatching_UT_14(t *testing.T) {
 		t.Fatalf("non-declared file matched: %v", hits)
 	}
 }
+
+// TestEvidenceUnit_UT_15 proves UT-15 (DD-15 "Evidence table and reporting"):
+// upsert replacement, reporting with and without evidence, and that only
+// test-spec kinds carry evidence in reports.
+func TestEvidenceUnit_UT_15(t *testing.T) {
+	e, st := newEngineStore(t)
+	tr := fullTree(t, e)
+
+	// No evidence yet: reports carry none.
+	if n, _ := e.Node(tr.ut); n.Evidence != nil {
+		t.Fatal("evidence must be absent before any finish")
+	}
+
+	// Upsert replaces.
+	if err := st.SetEvidence("p1", tr.ut, []string{"pkg::TestOld_UT_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEvidence("p1", tr.ut, []string{"pkg::TestNew_UT_1", "pkg::TestNew2_UT_1"}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := e.Node(tr.ut)
+	if n.Evidence == nil || len(n.Evidence.Tests) != 2 || n.Evidence.Tests[0] != "pkg::TestNew_UT_1" {
+		t.Fatalf("evidence = %+v, want replaced record with 2 tests", n.Evidence)
+	}
+	if n.Evidence.RecordedAt == "" {
+		t.Fatal("evidence must carry a timestamp")
+	}
+
+	// Non-test kinds never show evidence, even with a stray row.
+	if err := st.SetEvidence("p1", tr.arch, []string{"bogus"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.Node(tr.arch); n.Evidence != nil {
+		t.Fatal("arch spec must not carry evidence in reports")
+	}
+
+	// Deleting a node removes its evidence row.
+	extra := mustCreate(t, e, model.KindUnitTest, tr.dd, "extra", nil)
+	if err := st.SetEvidence("p1", extra.ID, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(extra.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := st.GetEvidence("p1", extra.ID); ok {
+		t.Fatal("evidence must be deleted with its node")
+	}
+}

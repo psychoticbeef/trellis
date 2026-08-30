@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS counters (
 	n          INTEGER NOT NULL,
 	PRIMARY KEY (project_id, scope)
 );
+CREATE TABLE IF NOT EXISTS evidence (
+	project_id  TEXT NOT NULL,
+	node_id     TEXT NOT NULL,
+	tests       TEXT NOT NULL,
+	recorded_at TEXT NOT NULL,
+	PRIMARY KEY (project_id, node_id)
+);
 CREATE TABLE IF NOT EXISTS events (
 	seq        INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_id TEXT NOT NULL,
@@ -267,8 +274,10 @@ func (s *Store) DeleteNode(projectID, id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`DELETE FROM deps WHERE project_id=? AND node_id=?`, projectID, id)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM deps WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
+		return err
+	}
+	return s.DeleteEvidence(projectID, id)
 }
 
 func (s *Store) listNodes(query string, args ...any) ([]model.Node, error) {
@@ -413,6 +422,45 @@ func (s *Store) listDeps(query string, args ...any) ([]model.Dep, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// ---- evidence ----
+
+type Evidence struct {
+	Tests      []string
+	RecordedAt string
+}
+
+// SetEvidence records the proving tests for a spec node, replacing any
+// earlier record — evidence is current state, not history.
+func (s *Store) SetEvidence(projectID, nodeID string, tests []string) error {
+	_, err := s.db.Exec(`INSERT INTO evidence (project_id, node_id, tests, recorded_at) VALUES (?,?,?,?)
+		ON CONFLICT(project_id, node_id) DO UPDATE SET tests=excluded.tests, recorded_at=excluded.recorded_at`,
+		projectID, nodeID, stringsJSON(tests), now())
+	return err
+}
+
+// GetEvidence returns the last recorded evidence, or ok=false when none exists.
+func (s *Store) GetEvidence(projectID, nodeID string) (Evidence, bool, error) {
+	var ev Evidence
+	var tests string
+	err := s.db.QueryRow(`SELECT tests, recorded_at FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID).
+		Scan(&tests, &ev.RecordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ev, false, nil
+	}
+	if err != nil {
+		return ev, false, err
+	}
+	if err := json.Unmarshal([]byte(tests), &ev.Tests); err != nil {
+		return ev, false, err
+	}
+	return ev, true, nil
+}
+
+func (s *Store) DeleteEvidence(projectID, nodeID string) error {
+	_, err := s.db.Exec(`DELETE FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID)
+	return err
 }
 
 // ---- events ----

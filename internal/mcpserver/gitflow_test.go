@@ -397,3 +397,44 @@ func TestPathPointerAcceptance_AT_15(t *testing.T) {
 		t.Fatalf("reverse lookup missing %s: %s", story, text(res))
 	}
 }
+
+// TestEvidenceAcceptance_AT_17 proves AT-17 (US-14 "Test evidence on
+// record") through MCP: after finish, get_node lists the proving tests with
+// timestamp and get_tree carries per-spec evidence.
+func TestEvidenceAcceptance_AT_17(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+	story, at, _, it, _, ut := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
+
+	n := call(t, cs, "get_node", map[string]any{"id": ut})
+	ev, ok := n["evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_node(%s) missing evidence: %v", ut, n)
+	}
+	tests := fmt.Sprintf("%v", ev["tests"])
+	if !strings.Contains(tests, "Test_"+strings.ReplaceAll(ut, "-", "_")) {
+		t.Fatalf("evidence tests = %s, want the proving test name", tests)
+	}
+	if ev["recorded_at"] == "" {
+		t.Fatal("evidence missing timestamp")
+	}
+
+	tree := call(t, cs, "get_tree", map[string]any{"story_id": story})
+	blob, _ := json.Marshal(tree)
+	if !strings.Contains(string(blob), `"evidence"`) {
+		t.Fatalf("get_tree missing evidence blocks:\n%s", blob)
+	}
+}

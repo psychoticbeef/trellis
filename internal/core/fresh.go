@@ -154,6 +154,11 @@ func (e *Engine) integrity(storyID string) ([]string, error) {
 
 // ---- reports ----
 
+type EvidenceInfo struct {
+	Tests      []string `json:"tests"`
+	RecordedAt string   `json:"recorded_at"`
+}
+
 type DepInfo struct {
 	Target     string `json:"target"`
 	Fresh      bool   `json:"fresh"`
@@ -161,16 +166,17 @@ type DepInfo struct {
 }
 
 type TreeNode struct {
-	ID       string     `json:"id"`
-	Kind     string     `json:"kind"`
-	Title    string     `json:"title"`
-	Hash     string     `json:"content_hash"`
-	Fresh    bool       `json:"fresh"`
-	Problems []string   `json:"problems,omitempty"`
-	Covers   []string   `json:"covers,omitempty"`
-	Paths    []string   `json:"paths,omitempty"`
-	Deps     []DepInfo  `json:"depends_on,omitempty"`
-	Children []TreeNode `json:"children,omitempty"`
+	ID       string        `json:"id"`
+	Kind     string        `json:"kind"`
+	Title    string        `json:"title"`
+	Hash     string        `json:"content_hash"`
+	Fresh    bool          `json:"fresh"`
+	Problems []string      `json:"problems,omitempty"`
+	Covers   []string      `json:"covers,omitempty"`
+	Paths    []string      `json:"paths,omitempty"`
+	Deps     []DepInfo     `json:"depends_on,omitempty"`
+	Evidence *EvidenceInfo `json:"evidence,omitempty"`
+	Children []TreeNode    `json:"children,omitempty"`
 }
 
 type ACInfo struct {
@@ -244,6 +250,13 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 		return TreeNode{}, err
 	}
 	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers, Paths: n.Paths}
+	if model.TestSpecKinds[n.Kind] {
+		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
+			return TreeNode{}, err
+		} else if ok {
+			tn.Evidence = &EvidenceInfo{Tests: ev.Tests, RecordedAt: ev.RecordedAt}
+		}
+	}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {
 		return TreeNode{}, err
@@ -278,19 +291,20 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 }
 
 type NodeReport struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	ParentID string    `json:"parent_id,omitempty"`
-	Title    string    `json:"title"`
-	Body     string    `json:"body"`
-	Covers   []string  `json:"covers,omitempty"`
-	Paths    []string  `json:"paths,omitempty"`
-	Status   string    `json:"status,omitempty"`
-	Hash     string    `json:"content_hash"`
-	Fresh    bool      `json:"fresh"`
-	Problems []string  `json:"problems,omitempty"`
-	Deps     []NodeDep `json:"depends_on,omitempty"`
-	ACs      []ACInfo  `json:"acceptance_criteria,omitempty"`
+	ID       string        `json:"id"`
+	Kind     string        `json:"kind"`
+	ParentID string        `json:"parent_id,omitempty"`
+	Title    string        `json:"title"`
+	Body     string        `json:"body"`
+	Covers   []string      `json:"covers,omitempty"`
+	Paths    []string      `json:"paths,omitempty"`
+	Status   string        `json:"status,omitempty"`
+	Hash     string        `json:"content_hash"`
+	Fresh    bool          `json:"fresh"`
+	Problems []string      `json:"problems,omitempty"`
+	Deps     []NodeDep     `json:"depends_on,omitempty"`
+	Evidence *EvidenceInfo `json:"evidence,omitempty"`
+	ACs      []ACInfo      `json:"acceptance_criteria,omitempty"`
 }
 
 type NodeDep struct {
@@ -319,6 +333,13 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 	r := NodeReport{
 		ID: n.ID, Kind: string(n.Kind), ParentID: n.ParentID, Title: n.Title, Body: n.Body,
 		Covers: n.Covers, Paths: n.Paths, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+	}
+	if model.TestSpecKinds[n.Kind] {
+		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
+			return NodeReport{}, err
+		} else if ok {
+			r.Evidence = &EvidenceInfo{Tests: ev.Tests, RecordedAt: ev.RecordedAt}
+		}
 	}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {
