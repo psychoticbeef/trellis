@@ -331,3 +331,147 @@ func TestACStoryHashIntegration_IT_2(t *testing.T) {
 	_, err = e.CreateNode(model.KindAcceptanceTest, tr.story, "at2", "", []string{"nope"})
 	wantErr(t, err, "unknown acceptance criteria", tr.story+".AC-1")
 }
+
+// TestInvalidationCascade_IT_3 proves IT-3 (US-3): edits at every tree level
+// (story AC, arch, detail design, cross-cutting target) produce the correct
+// stale set with reasons and the automatic downgrade, against a real store.
+func TestInvalidationCascade_IT_3(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	approve(t, e, tr.arch) // re-approve with dep pin
+	body := "edited"
+
+	refineOK := func() {
+		t.Helper()
+		if _, err := e.Transition(tr.story, "refine"); err != nil {
+			t.Fatalf("refine: %v", err)
+		}
+	}
+	repair := func(ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			approve(t, e, id)
+		}
+	}
+
+	refineOK()
+
+	// Story-level edit (AC): everything below the story goes stale.
+	r, _ := e.Node(tr.story)
+	if _, err := e.UpdateAC(r.ACs[0].ID, &body, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("after AC edit: status %s, want todo", got)
+	}
+	_, err := e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.story+" changed since approval",
+		tr.at+" stale: parent "+tr.story, tr.arch+" stale: parent "+tr.story)
+	repair(tr.story, tr.at, tr.arch)
+	refineOK()
+
+	// Arch-level edit: integration test and detail design stale, not the AT.
+	if _, err := e.UpdateNode(tr.arch, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.it+" stale: parent "+tr.arch, tr.dd+" stale: parent "+tr.arch)
+	if at, _ := e.Node(tr.at); !at.Fresh {
+		t.Fatal("acceptance test must stay fresh on arch edit")
+	}
+	repair(tr.arch, tr.it, tr.dd)
+	refineOK()
+
+	// Detail-design edit: only the unit test below goes stale.
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.ut+" stale: parent "+tr.dd)
+	if it, _ := e.Node(tr.it); !it.Fresh {
+		t.Fatal("integration test must stay fresh on detail design edit")
+	}
+	repair(tr.dd, tr.ut)
+	refineOK()
+
+	// Cross-cutting edit: dependent arch stale via pin, story downgraded.
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("after cc edit: status %s, want todo", got)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.arch+" stale: dependency "+cc.ID+" changed since pin")
+	approve(t, e, cc.ID)
+	repair(tr.arch, tr.it, tr.dd, tr.ut)
+	refineOK()
+}
+
+// TestFreshnessReasons_UT_3 proves UT-3 (DD-3 "Freshness computation"): each
+// freshness reason string, and approval re-pinning dependency hashes.
+func TestFreshnessReasons_UT_3(t *testing.T) {
+	e := newMemEngine(t)
+	story := mustCreate(t, e, model.KindStory, "", "s", nil)
+	arch := mustCreate(t, e, model.KindArch, story.ID, "as", nil)
+	body := "edited"
+
+	problems := func(id string) string {
+		t.Helper()
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(r.Problems, "\n")
+	}
+
+	// Reason: never approved.
+	if p := problems(story.ID); !strings.Contains(p, story.ID+" never approved") {
+		t.Fatalf("want 'never approved', got %q", p)
+	}
+
+	// Reason: content changed since approval (with short hashes).
+	approve(t, e, story.ID)
+	if _, err := e.UpdateNode(story.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(story.ID); !strings.Contains(p, "changed since approval (approved ") {
+		t.Fatalf("want 'changed since approval', got %q", p)
+	}
+	approve(t, e, story.ID)
+
+	// Reason: parent changed since approval.
+	approve(t, e, arch.ID)
+	newBody2 := "edited again"
+	if _, err := e.UpdateNode(story.ID, nil, &newBody2, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(arch.ID); !strings.Contains(p, "stale: parent "+story.ID+" changed since approval") {
+		t.Fatalf("want parent-changed reason, got %q", p)
+	}
+	approve(t, e, story.ID)
+	approve(t, e, arch.ID)
+
+	// Reason: dependency changed since pin; approval re-pins.
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(arch.ID, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(arch.ID); !strings.Contains(p, "stale: dependency "+cc.ID+" changed since pin") {
+		t.Fatalf("want dependency-changed reason, got %q", p)
+	}
+	approve(t, e, cc.ID)
+	approve(t, e, arch.ID) // helper passes current dep hash: re-pins
+	if p := problems(arch.ID); p != "" {
+		t.Fatalf("arch must be fresh after re-pinning approval, got %q", p)
+	}
+}

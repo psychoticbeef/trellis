@@ -223,3 +223,53 @@ func TestACLifecycleAcceptance_AT_2(t *testing.T) {
 	callErr(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "", "when": "w", "then": "t"},
 		"must all be non-empty")
 }
+
+// TestApprovalFlowAcceptance_AT_3 proves AT-3 (US-3 "Hash-based approval and
+// invalidation"): approve with a wrong hash, approve child before parent,
+// approve a full tree top-down, then edit a mid-tree node and assert the
+// stale cascade and the automatic story downgrade.
+func TestApprovalFlowAcceptance_AT_3(t *testing.T) {
+	cs := client(t)
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "s"})["id"].(string)
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g", "when": "w", "then": "t"})
+	arch := call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": story, "title": "as"})["id"].(string)
+
+	// Wrong hash: rejected without revealing the expected hash.
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "approve",
+		Arguments: map[string]any{"node_id": story, "content_hash": "0000"}})
+	if err != nil || !res.IsError {
+		t.Fatalf("approve with wrong hash must fail as tool error, got err=%v", err)
+	}
+	_, realHash := nodeStatus(t, cs, story)
+	if !strings.Contains(text(res), "hash mismatch") || strings.Contains(text(res), realHash) {
+		t.Fatalf("error must say hash mismatch and never reveal the real hash:\n%s", text(res))
+	}
+
+	// Child before parent: rejected demanding top-down order.
+	_, archHash := nodeStatus(t, cs, arch)
+	callErr(t, cs, "approve", map[string]any{"node_id": arch, "content_hash": archHash},
+		"parent "+story+" must be approved first")
+
+	// Full tree top-down on a fresh story, then refine succeeds.
+	story, _, _, _, dd, ut := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+
+	// Edit mid-tree: node unapproved, child stale with reasons, story todo.
+	call(t, cs, "update_node", map[string]any{"id": dd, "body": "changed"})
+	st, _ := nodeStatus(t, cs, story)
+	if st != "todo" {
+		t.Fatalf("status = %s, want todo after mid-tree edit", st)
+	}
+	tree := call(t, cs, "get_tree", map[string]any{"story_id": story})
+	problems, _ := json.Marshal(tree["blocking_problems"])
+	for _, want := range []string{dd + " changed since approval", ut + " stale: parent " + dd} {
+		if !strings.Contains(string(problems), want) {
+			t.Errorf("blocking_problems missing %q:\n%s", want, problems)
+		}
+	}
+
+	// Repair top-down and refine again.
+	approveMCP(t, cs, dd)
+	approveMCP(t, cs, ut)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+}
