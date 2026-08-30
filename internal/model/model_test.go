@@ -2,7 +2,7 @@ package model
 
 import "testing"
 
-func TestContentHashDeterministic(t *testing.T) {
+func TestContentHashDeterministic_UT_2(t *testing.T) {
 	n := Node{Kind: KindStory, Title: "t", Body: "b"}
 	acs := []AC{{ID: "US-1.AC-2", Given: "g2", When: "w2", Then: "t2"}, {ID: "US-1.AC-1", Given: "g", When: "w", Then: "t"}}
 	h1 := ContentHash(&n, acs)
@@ -13,7 +13,7 @@ func TestContentHashDeterministic(t *testing.T) {
 	}
 }
 
-func TestContentHashChangesOnACEdit(t *testing.T) {
+func TestContentHashChangesOnACEdit_UT_2(t *testing.T) {
 	n := Node{Kind: KindStory, Title: "t"}
 	h1 := ContentHash(&n, []AC{{ID: "US-1.AC-1", Given: "g", When: "w", Then: "t"}})
 	h2 := ContentHash(&n, []AC{{ID: "US-1.AC-1", Given: "g", When: "w", Then: "CHANGED"}})
@@ -22,7 +22,7 @@ func TestContentHashChangesOnACEdit(t *testing.T) {
 	}
 }
 
-func TestCoversOrderIrrelevant(t *testing.T) {
+func TestCoversOrderIrrelevant_UT_2(t *testing.T) {
 	a := Node{Kind: KindAcceptanceTest, Title: "t", Covers: []string{"A", "B"}}
 	b := Node{Kind: KindAcceptanceTest, Title: "t", Covers: []string{"B", "A"}}
 	if ContentHash(&a, nil) != ContentHash(&b, nil) {

@@ -27,6 +27,8 @@ Workflow per story:
    -> implement -> "finish" (lint, tests, verifies every test spec has a
    passing test referencing its id, merges into the base branch).
 
+Check the glossary in get_overview and reuse its exact wording in every spec
+you write; define new project terms with define_term (ultra short).
 Test naming: a test proves spec UT-3 iff its name contains "UT-3" or "UT_3".
 Editing any node invalidates approvals of its children/dependents and drops
 affected refined/in_progress stories back to todo. Statuses can never be set
@@ -79,8 +81,23 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "unlink_dependency",
 		Description: "Remove a dependency link."},
 		s.unlinkDep)
+	mcp.AddTool(srv, &mcp.Tool{Name: "search_specs",
+		Description: "Full-text search over spec titles, bodies and acceptance criteria: every term must match (last term as word prefix), results ranked by relevance, snippet per hit. Use this to find relevant context before designing or implementing."},
+		s.searchSpecs)
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_paths",
+		Description: "Declare which repo-relative files/folders realize a story (metadata, does not invalidate approvals; empty list clears). finish verifies the paths exist."},
+		s.setPaths)
+	mcp.AddTool(srv, &mcp.Tool{Name: "specs_for_path",
+		Description: "Reverse lookup: stories whose declared paths cover a file (exact or folder prefix). Check this before changing a file to find the specs it belongs to."},
+		s.specsForPath)
+	mcp.AddTool(srv, &mcp.Tool{Name: "define_term",
+		Description: "Define or update a project glossary term (term <= 64 chars, definition <= 240 chars). The glossary keeps wording consistent; reuse its exact terms in specs."},
+		s.defineTerm)
+	mcp.AddTool(srv, &mcp.Tool{Name: "delete_term",
+		Description: "Remove a glossary term."},
+		s.deleteTerm)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
-		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch)."},
+		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
 	return srv
 }
@@ -141,7 +158,25 @@ type depIn struct {
 
 type transitionIn struct {
 	StoryID string `json:"story_id"`
-	Action  string `json:"action" jsonschema:"refine | start | finish"`
+	Action  string `json:"action" jsonschema:"refine | start | finish | abort"`
+}
+
+type searchIn struct {
+	Query string `json:"query"`
+}
+
+type setPathsIn struct {
+	StoryID string   `json:"story_id"`
+	Paths   []string `json:"paths" jsonschema:"repo-relative files or folders; empty list clears"`
+}
+
+type pathIn struct {
+	Path string `json:"path" jsonschema:"repo-relative file path"`
+}
+
+type termIn struct {
+	Term       string `json:"term"`
+	Definition string `json:"definition,omitempty" jsonschema:"required for define_term; max 240 chars"`
 }
 
 type okOut struct {
@@ -237,6 +272,38 @@ func (s *Server) unlinkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) 
 		return nil, okOut{}, err
 	}
 	return nil, okOut{Message: fmt.Sprintf("dependency %s -> %s removed", in.NodeID, in.TargetID)}, nil
+}
+
+func (s *Server) searchSpecs(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, []core.SearchHit, error) {
+	hits, err := s.engine.Search(in.Query)
+	return nil, hits, err
+}
+
+func (s *Server) setPaths(_ context.Context, _ *mcp.CallToolRequest, in setPathsIn) (*mcp.CallToolResult, okOut, error) {
+	cleaned, err := s.engine.SetPaths(in.StoryID, in.Paths)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: fmt.Sprintf("%s now declares %d path(s): %v", in.StoryID, len(cleaned), cleaned)}, nil
+}
+
+func (s *Server) specsForPath(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, []core.StorySummary, error) {
+	stories, err := s.engine.StoriesForPath(in.Path)
+	return nil, stories, err
+}
+
+func (s *Server) defineTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DefineTerm(in.Term, in.Definition); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: "term " + in.Term + " defined"}, nil
+}
+
+func (s *Server) deleteTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DeleteTerm(in.Term); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: "term " + in.Term + " deleted"}, nil
 }
 
 func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {

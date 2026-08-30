@@ -101,7 +101,7 @@ func status(t *testing.T, e *core.Engine, storyID string) string {
 	return r.Status
 }
 
-func TestTreeRules(t *testing.T) {
+func TestTreeRules_IT_1(t *testing.T) {
 	e := newEngine(t)
 	story := mustCreate(t, e, model.KindStory, "", "s", nil)
 
@@ -244,7 +244,7 @@ func TestCrossCuttingDependencies(t *testing.T) {
 	wantErr(t, err, "delete blocked", "dependent "+tr.arch)
 }
 
-func TestDeleteGuards(t *testing.T) {
+func TestDeleteGuards_IT_1(t *testing.T) {
 	e := newEngine(t)
 	tr := fullTree(t, e)
 
@@ -261,4 +261,694 @@ func TestPruneOnlyDone(t *testing.T) {
 	tr := fullTree(t, e)
 	err := e.Prune(tr.story)
 	wantErr(t, err, "prune blocked", "only done stories")
+}
+
+// TestACStoryHashIntegration_IT_2 proves IT-2 (US-2): AC add/edit/delete each
+// change the story hash against a real store, child freshness and story
+// status react, and covers validation lists the known AC ids.
+func TestACStoryHashIntegration_IT_2(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+
+	hash := func() string {
+		r, err := e.Node(tr.story)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Hash
+	}
+
+	h0 := hash()
+	ac2, err := e.AddAC(tr.story, "g2", "w2", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := hash()
+	if h1 == h0 {
+		t.Fatal("AC add must change the story hash")
+	}
+	newWhen := "changed"
+	if _, err := e.UpdateAC(ac2.ID, nil, &newWhen, nil); err != nil {
+		t.Fatal(err)
+	}
+	h2 := hash()
+	if h2 == h1 {
+		t.Fatal("AC edit must change the story hash")
+	}
+	// While the story hash differs from the approved one, children are stale
+	// and the story dropped to todo.
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("status = %s, want todo", got)
+	}
+	at, err := e.Node(tr.at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at.Fresh {
+		t.Fatal("acceptance test must be stale while the story hash differs")
+	}
+
+	// Freshness is content-addressed: deleting the added AC restores the
+	// original story hash, so the child approval becomes valid again.
+	if err := e.DeleteAC(ac2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if h3 := hash(); h3 != h0 {
+		t.Fatal("deleting the added AC must restore the original story hash")
+	}
+	at, err = e.Node(tr.at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !at.Fresh {
+		t.Fatal("acceptance test must be fresh again once the story content is restored")
+	}
+
+	// Covers validation names the known AC ids.
+	_, err = e.CreateNode(model.KindAcceptanceTest, tr.story, "at2", "", []string{"nope"})
+	wantErr(t, err, "unknown acceptance criteria", tr.story+".AC-1")
+}
+
+// TestInvalidationCascade_IT_3 proves IT-3 (US-3): edits at every tree level
+// (story AC, arch, detail design, cross-cutting target) produce the correct
+// stale set with reasons and the automatic downgrade, against a real store.
+func TestInvalidationCascade_IT_3(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	approve(t, e, tr.arch) // re-approve with dep pin
+	body := "edited"
+
+	refineOK := func() {
+		t.Helper()
+		if _, err := e.Transition(tr.story, "refine"); err != nil {
+			t.Fatalf("refine: %v", err)
+		}
+	}
+	repair := func(ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			approve(t, e, id)
+		}
+	}
+
+	refineOK()
+
+	// Story-level edit (AC): everything below the story goes stale.
+	r, _ := e.Node(tr.story)
+	if _, err := e.UpdateAC(r.ACs[0].ID, &body, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("after AC edit: status %s, want todo", got)
+	}
+	_, err := e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.story+" changed since approval",
+		tr.at+" stale: parent "+tr.story, tr.arch+" stale: parent "+tr.story)
+	repair(tr.story, tr.at, tr.arch)
+	refineOK()
+
+	// Arch-level edit: integration test and detail design stale, not the AT.
+	if _, err := e.UpdateNode(tr.arch, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.it+" stale: parent "+tr.arch, tr.dd+" stale: parent "+tr.arch)
+	if at, _ := e.Node(tr.at); !at.Fresh {
+		t.Fatal("acceptance test must stay fresh on arch edit")
+	}
+	repair(tr.arch, tr.it, tr.dd)
+	refineOK()
+
+	// Detail-design edit: only the unit test below goes stale.
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.ut+" stale: parent "+tr.dd)
+	if it, _ := e.Node(tr.it); !it.Fresh {
+		t.Fatal("integration test must stay fresh on detail design edit")
+	}
+	repair(tr.dd, tr.ut)
+	refineOK()
+
+	// Cross-cutting edit: dependent arch stale via pin, story downgraded.
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("after cc edit: status %s, want todo", got)
+	}
+	_, err = e.Transition(tr.story, "refine")
+	wantErr(t, err, tr.arch+" stale: dependency "+cc.ID+" changed since pin")
+	approve(t, e, cc.ID)
+	repair(tr.arch, tr.it, tr.dd, tr.ut)
+	refineOK()
+}
+
+// TestFreshnessReasons_UT_3 proves UT-3 (DD-3 "Freshness computation"): each
+// freshness reason string, and approval re-pinning dependency hashes.
+func TestFreshnessReasons_UT_3(t *testing.T) {
+	e := newMemEngine(t)
+	story := mustCreate(t, e, model.KindStory, "", "s", nil)
+	arch := mustCreate(t, e, model.KindArch, story.ID, "as", nil)
+	body := "edited"
+
+	problems := func(id string) string {
+		t.Helper()
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(r.Problems, "\n")
+	}
+
+	// Reason: never approved.
+	if p := problems(story.ID); !strings.Contains(p, story.ID+" never approved") {
+		t.Fatalf("want 'never approved', got %q", p)
+	}
+
+	// Reason: content changed since approval (with short hashes).
+	approve(t, e, story.ID)
+	if _, err := e.UpdateNode(story.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(story.ID); !strings.Contains(p, "changed since approval (approved ") {
+		t.Fatalf("want 'changed since approval', got %q", p)
+	}
+	approve(t, e, story.ID)
+
+	// Reason: parent changed since approval.
+	approve(t, e, arch.ID)
+	newBody2 := "edited again"
+	if _, err := e.UpdateNode(story.ID, nil, &newBody2, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(arch.ID); !strings.Contains(p, "stale: parent "+story.ID+" changed since approval") {
+		t.Fatalf("want parent-changed reason, got %q", p)
+	}
+	approve(t, e, story.ID)
+	approve(t, e, arch.ID)
+
+	// Reason: dependency changed since pin; approval re-pins.
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(arch.ID, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := problems(arch.ID); !strings.Contains(p, "stale: dependency "+cc.ID+" changed since pin") {
+		t.Fatalf("want dependency-changed reason, got %q", p)
+	}
+	approve(t, e, cc.ID)
+	approve(t, e, arch.ID) // helper passes current dep hash: re-pins
+	if p := problems(arch.ID); p != "" {
+		t.Fatalf("arch must be fresh after re-pinning approval, got %q", p)
+	}
+}
+
+// TestDependencyLifecycle_IT_4 proves IT-4 (US-4): two stories sharing one
+// cross-cutting target — link/unlink, approval re-pinning, cascade on target
+// edit hitting both stories, delete blocking, against a real store.
+func TestDependencyLifecycle_IT_4(t *testing.T) {
+	e := newEngine(t)
+	a := fullTree(t, e)
+	b := fullTree(t, e)
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "shared auth", nil)
+	approve(t, e, cc.ID)
+	for _, archID := range []string{a.arch, b.arch} {
+		if err := e.LinkDep(archID, cc.ID); err != nil {
+			t.Fatal(err)
+		}
+		approve(t, e, archID)
+	}
+	for _, s := range []string{a.story, b.story} {
+		if _, err := e.Transition(s, "refine"); err != nil {
+			t.Fatalf("refine %s: %v", s, err)
+		}
+	}
+
+	// One target edit downgrades both stories and stales both arch specs.
+	body := "rotated keys"
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{a.story, b.story} {
+		if got := status(t, e, s); got != "todo" {
+			t.Fatalf("story %s: status %s, want todo", s, got)
+		}
+	}
+	_, err := e.Transition(a.story, "refine")
+	wantErr(t, err, a.arch+" stale: dependency "+cc.ID)
+
+	// Delete blocked listing both dependents; unlink one, still blocked.
+	err = e.DeleteNode(cc.ID)
+	wantErr(t, err, "dependent "+a.arch, "dependent "+b.arch)
+	if err := e.UnlinkDep(a.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = e.DeleteNode(cc.ID)
+	wantErr(t, err, "dependent "+b.arch)
+
+	// Re-approval re-pins: story B repairs without touching story A.
+	approve(t, e, cc.ID)
+	approve(t, e, b.arch)
+	if _, err := e.Transition(b.story, "refine"); err != nil {
+		t.Fatalf("refine %s after re-pin: %v", b.story, err)
+	}
+}
+
+// TestDepGuards_UT_4 proves UT-4 (DD-4 "Dependency edges"): self-link
+// rejection, link-to-stale rejection, and missing/stale/unknown dep_hashes
+// entries each producing their own error line.
+func TestDepGuards_UT_4(t *testing.T) {
+	e := newMemEngine(t)
+	story := mustCreate(t, e, model.KindStory, "", "s", nil)
+	approve(t, e, story.ID)
+	arch := mustCreate(t, e, model.KindArch, story.ID, "as", nil)
+	cc1 := mustCreate(t, e, model.KindCrossCutting, "", "cc1", nil)
+	cc2 := mustCreate(t, e, model.KindCrossCutting, "", "cc2", nil)
+
+	err := e.LinkDep(arch.ID, arch.ID)
+	wantErr(t, err, "cannot depend on itself")
+
+	err = e.LinkDep(arch.ID, cc1.ID)
+	wantErr(t, err, "link blocked", cc1.ID+" never approved")
+
+	approve(t, e, cc1.ID)
+	approve(t, e, cc2.ID)
+	if err := e.LinkDep(arch.ID, cc1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.LinkDep(arch.ID, cc2.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale cc2 pin plus missing cc1 entry plus unknown extra target: three lines.
+	body := "edited"
+	if _, err := e.UpdateNode(cc2.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := e.Node(arch.ID)
+	var cc2Old string
+	for _, d := range r.Deps {
+		if d.Target == cc2.ID {
+			cc2Old = "stale-" + d.TargetHash // deliberately wrong
+		}
+	}
+	err = e.Approve(arch.ID, r.Hash, map[string]string{cc2.ID: cc2Old, "CC-99": "x"})
+	wantErr(t, err,
+		"missing dep_hashes entry for "+cc1.ID,
+		"dep_hashes["+cc2.ID+"] is stale",
+		"dep_hashes contains CC-99, but "+arch.ID+" has no dependency on it")
+}
+
+// TestGuardProblemLines_UT_5 proves UT-5 (DD-5 "Integrity computation"): each
+// structural defect produces exactly its problem line, and refine flips the
+// status only on an empty problem list.
+func TestGuardProblemLines_UT_5(t *testing.T) {
+	e := newMemEngine(t)
+
+	line := func(storyID, want string) {
+		t.Helper()
+		_, err := e.Transition(storyID, "refine")
+		wantErr(t, err, want)
+		if got := status(t, e, storyID); got != "todo" {
+			t.Fatalf("blocked refine must not change status, got %s", got)
+		}
+	}
+
+	// Bare story: the three top-level structure lines.
+	s1 := mustCreate(t, e, model.KindStory, "", "s1", nil)
+	approve(t, e, s1.ID)
+	line(s1.ID, "story has no acceptance criteria")
+	line(s1.ID, "story has no acceptance test specs")
+	line(s1.ID, "story has no arch spec")
+
+	// Uncovered AC names the criterion.
+	s2 := mustCreate(t, e, model.KindStory, "", "s2", nil)
+	e.AddAC(s2.ID, "g", "w", "t")
+	ac2, _ := e.AddAC(s2.ID, "g2", "w2", "t2")
+	mustCreate(t, e, model.KindAcceptanceTest, s2.ID, "at", []string{s2.ID + ".AC-1"})
+	line(s2.ID, "acceptance criterion "+ac2.ID+" is not covered by any acceptance test spec")
+
+	// Arch without integration tests / without detail designs.
+	arch2 := mustCreate(t, e, model.KindArch, s2.ID, "as", nil)
+	line(s2.ID, "arch spec "+arch2.ID+" has no integration test specs")
+	line(s2.ID, "arch spec "+arch2.ID+" has no detail designs")
+
+	// Detail design without unit tests.
+	mustCreate(t, e, model.KindIntegrationTest, arch2.ID, "it", nil)
+	dd := mustCreate(t, e, model.KindDetailDesign, arch2.ID, "dd", nil)
+	line(s2.ID, "detail design "+dd.ID+" has no unit test specs")
+
+	// Empty problem list flips the status — and only then.
+	ut := mustCreate(t, e, model.KindUnitTest, dd.ID, "ut", nil)
+	at2 := mustCreate(t, e, model.KindAcceptanceTest, s2.ID, "at2", []string{ac2.ID})
+	for _, n := range []model.Node{s2, at2, arch2, dd, ut} {
+		approve(t, e, n.ID)
+	}
+	line(s2.ID, "never approved") // the integration test node is still unapproved
+	// approve the remaining nodes found via the tree report
+	tree, err := e.Tree(s2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing []string
+	var walk func(n core.TreeNode)
+	walk = func(n core.TreeNode) {
+		if !n.Fresh {
+			missing = append(missing, n.ID)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(tree.Story)
+	for _, id := range missing {
+		approve(t, e, id)
+	}
+	if _, err := e.Transition(s2.ID, "refine"); err != nil {
+		t.Fatalf("refine with empty problem list: %v", err)
+	}
+	if got := status(t, e, s2.ID); got != "refined" {
+		t.Fatalf("status = %s, want refined", got)
+	}
+}
+
+// TestDoneMutability_UT_9 proves UT-9 (DD-9 "Transition-only done semantics"):
+// each mutation op succeeds against a done story, downgrade skips done, and
+// re-approval clears staleness. Done state is store-level test setup.
+func TestDoneMutability_UT_9(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "test", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if err := st.SetNodeStatus("p1", tr.story, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	body := "x"
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got := status(t, e, tr.story); got != "done" {
+		t.Fatalf("downgrade must skip done, got %s", got)
+	}
+	extra := mustCreate(t, e, model.KindUnitTest, tr.dd, "extra", nil)
+	if err := e.DeleteNode(extra.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	ac, err := e.AddAC(tr.story, "g2", "w2", "t2")
+	if err != nil {
+		t.Fatalf("AC add: %v", err)
+	}
+	if _, err := e.UpdateAC(ac.ID, nil, &body, nil); err != nil {
+		t.Fatalf("AC update: %v", err)
+	}
+	if err := e.DeleteAC(ac.ID); err != nil {
+		t.Fatalf("AC delete: %v", err)
+	}
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatalf("link from done tree: %v", err)
+	}
+
+	// Re-approval clears the staleness the edits caused.
+	approve(t, e, tr.dd)
+	approve(t, e, tr.ut)
+	approve(t, e, tr.arch)
+	if n, _ := e.Node(tr.dd); !n.Fresh {
+		t.Fatalf("dd must be fresh after re-approval: %v", n.Problems)
+	}
+}
+
+// TestSequencingSemantics_UT_12 proves UT-12 (DD-12 "Sequencing link
+// semantics"): unpinned edges carry no freshness coupling, approve needs no
+// dep hash for them, start names each unfinished dependency, cycles are
+// rejected.
+func TestSequencingSemantics_UT_12(t *testing.T) {
+	e := newMemEngine(t)
+	a := fullTree(t, e)
+	b := fullTree(t, e)
+	c := fullTree(t, e)
+
+	// Linking to a todo story works (no freshness guard for sequencing).
+	if err := e.LinkDep(b.story, a.story); err != nil {
+		t.Fatalf("sequencing link to todo story: %v", err)
+	}
+
+	// No freshness coupling: editing A leaves B fresh.
+	body := "changed"
+	if _, err := e.UpdateNode(a.story, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.Node(b.story); !n.Fresh {
+		t.Fatalf("sequencing dependent must stay fresh, got %v", n.Problems)
+	}
+
+	// Approve without dep_hashes for sequencing links.
+	r, _ := e.Node(b.story)
+	if err := e.Approve(b.story, r.Hash, nil); err != nil {
+		t.Fatalf("approve without sequencing dep hash: %v", err)
+	}
+
+	// start names each unfinished dependency with its status.
+	if _, err := e.Transition(b.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Transition(b.story, "start")
+	wantErr(t, err, "start blocked: unfinished dependencies", a.story+" (todo)")
+
+	// Cycle detection: direct and transitive.
+	err = e.LinkDep(a.story, b.story)
+	wantErr(t, err, "sequencing cycle", a.story+" -> "+b.story+" -> "+a.story)
+	if err := e.LinkDep(a.story, c.story); err != nil {
+		t.Fatal(err)
+	}
+	err = e.LinkDep(c.story, b.story)
+	wantErr(t, err, "sequencing cycle")
+}
+func ptr(s string) *string { return &s }
+
+// TestPathMatching_UT_14 proves UT-14 (DD-14 "Path storage and matching"):
+// path cleaning, exact and folder-prefix matching incl. the foo vs foobar
+// boundary, and hash stability of SetPaths.
+func TestPathMatching_UT_14(t *testing.T) {
+	e := newMemEngine(t)
+	s := mustCreate(t, e, model.KindStory, "", "s", nil)
+	approve(t, e, s.ID)
+	before, _ := e.Node(s.ID)
+
+	// Cleaning: dedup, normalization, rejection of absolute and escaping paths.
+	cleaned, err := e.SetPaths(s.ID, []string{"api/./auth.go", "api/auth.go", "docs/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleaned) != 2 || cleaned[0] != "api/auth.go" || cleaned[1] != "docs" {
+		t.Fatalf("cleaned = %v", cleaned)
+	}
+	if _, err := e.SetPaths(s.ID, []string{"/abs/path"}); err == nil {
+		t.Fatal("absolute path must be rejected")
+	}
+	if _, err := e.SetPaths(s.ID, []string{"../escape"}); err == nil {
+		t.Fatal("escaping path must be rejected")
+	}
+	if _, err := e.SetPaths("nope", []string{"x"}); err == nil {
+		t.Fatal("unknown story must be rejected")
+	}
+
+	// Hash stability: paths are metadata, approval survives.
+	after, _ := e.Node(s.ID)
+	if after.Hash != before.Hash || !after.Fresh {
+		t.Fatalf("SetPaths must not touch the content hash (before %s, after %s, fresh %v)", before.Hash, after.Hash, after.Fresh)
+	}
+
+	// Matching: exact, folder prefix, foo vs foobar boundary.
+	if !core.PathCovers("api/auth.go", "api/auth.go") {
+		t.Fatal("exact match")
+	}
+	if !core.PathCovers("docs", "docs/adr/001.md") {
+		t.Fatal("folder prefix match")
+	}
+	if core.PathCovers("docs", "docsx/file.md") {
+		t.Fatal("foobar boundary must not match")
+	}
+	hits, err := e.StoriesForPath("api/auth.go")
+	if err != nil || len(hits) != 1 || hits[0].ID != s.ID {
+		t.Fatalf("StoriesForPath: %v %v", hits, err)
+	}
+	if hits, _ := e.StoriesForPath("api/other.go"); len(hits) != 0 {
+		t.Fatalf("non-declared file matched: %v", hits)
+	}
+}
+
+// TestEvidenceUnit_UT_15 proves UT-15 (DD-15 "Evidence table and reporting"):
+// upsert replacement, reporting with and without evidence, and that only
+// test-spec kinds carry evidence in reports.
+func TestEvidenceUnit_UT_15(t *testing.T) {
+	e, st := newEngineStore(t)
+	tr := fullTree(t, e)
+
+	// No evidence yet: reports carry none.
+	if n, _ := e.Node(tr.ut); n.Evidence != nil {
+		t.Fatal("evidence must be absent before any finish")
+	}
+
+	// Upsert replaces.
+	if err := st.SetEvidence("p1", tr.ut, []string{"pkg::TestOld_UT_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEvidence("p1", tr.ut, []string{"pkg::TestNew_UT_1", "pkg::TestNew2_UT_1"}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := e.Node(tr.ut)
+	if n.Evidence == nil || len(n.Evidence.Tests) != 2 || n.Evidence.Tests[0] != "pkg::TestNew_UT_1" {
+		t.Fatalf("evidence = %+v, want replaced record with 2 tests", n.Evidence)
+	}
+	if n.Evidence.RecordedAt == "" {
+		t.Fatal("evidence must carry a timestamp")
+	}
+
+	// Non-test kinds never show evidence, even with a stray row.
+	if err := st.SetEvidence("p1", tr.arch, []string{"bogus"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.Node(tr.arch); n.Evidence != nil {
+		t.Fatal("arch spec must not carry evidence in reports")
+	}
+
+	// Deleting a node removes its evidence row.
+	extra := mustCreate(t, e, model.KindUnitTest, tr.dd, "extra", nil)
+	if err := st.SetEvidence("p1", extra.ID, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(extra.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := st.GetEvidence("p1", extra.ID); ok {
+		t.Fatal("evidence must be deleted with its node")
+	}
+}
+
+// TestSearchUnit_UT_13 proves UT-13 (DD-13, US-12) in its FTS era: hostile
+// input is treated literally, one hit per node, empty results stay errors-free.
+func TestSearchUnit_UT_13(t *testing.T) {
+	e := newMemEngine(t)
+	s1 := mustCreate(t, e, model.KindStory, "", "payment flow", nil)
+	if _, err := e.UpdateNode(s1.ID, nil, ptr("handles 100% of retries via idempotency_key"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Punctuation-heavy queries match literally via tokenization, never error.
+	if hits, err := e.Search("100%"); err != nil || len(hits) != 1 {
+		t.Fatalf("literal %% search: %v %v", hits, err)
+	}
+	if hits, err := e.Search("idempotency_key"); err != nil || len(hits) != 1 {
+		t.Fatalf("underscore search: %v %v", hits, err)
+	}
+	if hits, err := e.Search(`"NEAR( OR )"`); err != nil || len(hits) != 0 {
+		t.Fatalf("FTS operators must be literal: %v %v", hits, err)
+	}
+
+	// One hit per node even when title and body both match.
+	if _, err := e.UpdateNode(s1.ID, ptr("retries everywhere"), ptr("retries retried retryingly"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := e.Search("retrie"); len(hits) != 1 {
+		t.Fatalf("dedup: got %d hits, want 1", len(hits))
+	}
+
+	// No match and empty query: empty list, no error.
+	if hits, err := e.Search("zzzznope"); err != nil || len(hits) != 0 {
+		t.Fatalf("no-match: %v %v", hits, err)
+	}
+	if hits, err := e.Search("  "); err != nil || len(hits) != 0 {
+		t.Fatalf("empty query: %v %v", hits, err)
+	}
+}
+
+// TestSearchIntegration_IT_12 proves IT-12 (US-12) in its FTS era: matches
+// across node fields and AC text, case-insensitivity, owning-story
+// resolution for deep nodes.
+func TestSearchIntegration_IT_12(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	if _, err := e.UpdateNode(tr.ut, nil, ptr("verifies the RavenClaw token parser"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AddAC(tr.story, "a griffin keeper", "they feed the griffin", "it purrs"); err != nil {
+		t.Fatal(err)
+	}
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "structured gribbleflux logging", nil)
+
+	// Case-insensitive body match on a deep node resolves the owning story.
+	hits, err := e.Search("ravenclaw")
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("deep search: %v %v", hits, err)
+	}
+	if hits[0].ID != tr.ut || hits[0].Story != tr.story {
+		t.Fatalf("hit = %+v, want %s owned by %s", hits[0], tr.ut, tr.story)
+	}
+
+	// AC-only match surfaces the owning story with a snippet from the AC text.
+	hits, _ = e.Search("griffin")
+	if len(hits) != 1 || hits[0].ID != tr.story || !strings.Contains(hits[0].Snippet, "griffin") {
+		t.Fatalf("AC search: %+v", hits)
+	}
+
+	// Cross-cutting hit carries no owning story.
+	hits, _ = e.Search("GRIBBLEFLUX")
+	if len(hits) != 1 || hits[0].ID != cc.ID || hits[0].Story != "" {
+		t.Fatalf("cc search: %+v", hits)
+	}
+}
+
+// TestSearchRanking_IT_19 proves the engine half of IT-19 (US-19): BM25
+// ranking order and owning-story resolution stay intact on the FTS path.
+func TestSearchRanking_IT_19(t *testing.T) {
+	e := newMemEngine(t)
+	weak := mustCreate(t, e, model.KindStory, "", "gate", nil)
+	if _, err := e.UpdateNode(weak.ID, nil, ptr("mentions the merge gate once in much other unrelated prose about many other things entirely"), nil); err != nil {
+		t.Fatal(err)
+	}
+	strong := mustCreate(t, e, model.KindStory, "", "merge gate", nil)
+	if _, err := e.UpdateNode(strong.ID, nil, ptr("merge gate merge gate: the merge gate story"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := e.Search("merge gate")
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("search: %v %v", hits, err)
+	}
+	if hits[0].ID != strong.ID {
+		t.Fatalf("BM25 order wrong: %+v", hits)
+	}
+
+	// Prefix on the last term.
+	if hits, _ := e.Search("merge gat"); len(hits) != 2 {
+		t.Fatalf("prefix search: %+v", hits)
+	}
+	if hits, _ := e.Search("mer gate"); len(hits) != 0 {
+		t.Fatalf("only the last term is a prefix: %+v", hits)
+	}
 }

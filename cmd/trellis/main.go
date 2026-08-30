@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"trellis/internal/board"
 	"trellis/internal/core"
 	"trellis/internal/mcpserver"
 	"trellis/internal/store"
@@ -35,6 +36,10 @@ Usage:
   trellis tree <project-id> <story-id>                         print a story's spec tree
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
+  trellis affected <project-id> <path>                         stories declaring a file/folder
+  trellis board <project-id> [-o <file>] [--serve [--addr]]    write or serve the HTML spec board
+  trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
+  trellis release <project-id>                                 merge base into release with feature manifest
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -67,6 +72,14 @@ func run(args []string) error {
 		return cmdLog(rest)
 	case "prune":
 		return cmdPrune(rest)
+	case "affected":
+		return cmdAffected(rest)
+	case "board":
+		return cmdBoard(rest)
+	case "gate":
+		return cmdGate(rest)
+	case "release":
+		return cmdRelease(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -139,17 +152,14 @@ func cmdInit(args []string) error {
 	if err := st.CreateProject(store.Project{ID: id, Name: *name, RepoPath: repoAbs, BaseBranch: *base}); err != nil {
 		return err
 	}
-	fmt.Printf(`project created: %s
-
-Next steps:
-1. Configure the gates:
+	fmt.Printf("project created: %s\n\nscaffolding %s:\n", id, repoAbs)
+	for _, msg := range scaffold(repoAbs, id) {
+		fmt.Println("  -", msg)
+	}
+	fmt.Printf(`
+Next step — configure the gates:
    trellis config %s --lint '<lint cmd>' --test '<test cmd producing junit xml>' --junit '<glob, e.g. reports/*.xml>'
-2. Register the MCP server in the repo (.mcp.json):
-   {"mcpServers": {"trellis": {"command": "trellis", "args": ["serve", "--project", "%s"]}}}
-3. Point the agent at it (AGENTS.md):
-   trellis-project: %s
-   (Specs, tickets and story state live in trellis; use its MCP tools. It is the single source of truth.)
-`, id, id, id, id)
+`, id)
 	return nil
 }
 
@@ -181,6 +191,7 @@ func cmdConfig(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch")
+	release := fs.String("release", "", "release branch (default main)")
 	lint := fs.String("lint", "", "lint command (run before merge)")
 	test := fs.String("test", "", "test command (must write junit xml)")
 	junit := fs.String("junit", "", "junit report glob, relative to repo")
@@ -204,6 +215,7 @@ func cmdConfig(args []string) error {
 	}
 	set(&p.RepoPath, *repo)
 	set(&p.BaseBranch, *base)
+	set(&p.ReleaseBranch, *release)
 	set(&p.LintCmd, *lint)
 	set(&p.TestCmd, *test)
 	set(&p.JUnitGlob, *junit)
@@ -212,8 +224,8 @@ func cmdConfig(args []string) error {
 			return err
 		}
 	}
-	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
-		p.ID, p.Name, p.RepoPath, p.BaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
+	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nrelease:  %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
+		p.ID, p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
 	return nil
 }
 
@@ -316,6 +328,71 @@ func cmdLog(args []string) error {
 	for i := len(events) - 1; i >= 0; i-- {
 		e := events[i]
 		fmt.Printf("%s  %-15s %-8s %s\n", e.TS, e.Action, e.NodeID, e.Detail)
+	}
+	return nil
+}
+
+func cmdBoard(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: trellis board <project-id> [-o file] [--serve [--addr host:port]]")
+	}
+	id, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("board", flag.ExitOnError)
+	out := fs.String("o", "trellis-board.html", "output file")
+	serve := fs.Bool("serve", false, "serve the board over HTTP with live reload")
+	addr := fs.String("addr", "127.0.0.1:7420", "listen address for --serve")
+	fs.Parse(rest)
+	e, st, err := engine(id)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if *serve {
+		return board.Serve(e, st, *addr)
+	}
+	html, err := board.Render(e)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, []byte(html), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("board written to %s\n", *out)
+	return nil
+}
+
+func cmdRelease(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: trellis release <project-id>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	msg, err := e.Release()
+	if err != nil {
+		return err
+	}
+	fmt.Println(msg)
+	return nil
+}
+
+func cmdAffected(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: trellis affected <project-id> <path>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	stories, err := e.StoriesForPath(args[1])
+	if err != nil {
+		return err
+	}
+	for _, s := range stories {
+		fmt.Printf("%-6s %-12s %s\n", s.ID, s.Status, s.Title)
 	}
 	return nil
 }

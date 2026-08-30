@@ -2,7 +2,9 @@ package core
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"trellis/internal/gitops"
@@ -31,8 +33,10 @@ func (e *Engine) Transition(storyID, action string) (string, error) {
 		return e.start(story)
 	case "finish":
 		return e.finish(story)
+	case "abort":
+		return e.abort(story)
 	default:
-		return "", fmt.Errorf("unknown action %q; valid actions: refine, start, finish", action)
+		return "", fmt.Errorf("unknown action %q; valid actions: refine, start, finish, abort", action)
 	}
 }
 
@@ -70,6 +74,12 @@ func (e *Engine) refine(story model.Node) (string, error) {
 
 func branchName(storyID string) string { return "feature/" + storyID }
 
+const worktreeDir = ".trellis-worktrees"
+
+func (e *Engine) worktreePath(storyID string) string {
+	return filepath.Join(e.Project.RepoPath, worktreeDir, storyID)
+}
+
 func (e *Engine) git() (gitops.Git, error) {
 	if e.Project.RepoPath == "" {
 		return gitops.Git{}, fmt.Errorf("no repo configured for this project: run `trellis config %s --repo <path>`", e.pid())
@@ -84,19 +94,42 @@ func (e *Engine) start(story model.Node) (string, error) {
 	if err := e.requireIntegrity(story.ID, "start"); err != nil {
 		return "", err
 	}
+	deps, err := e.st.ListDeps(e.pid(), story.ID)
+	if err != nil {
+		return "", err
+	}
+	var unfinished []string
+	for _, d := range deps {
+		target, err := e.st.GetNode(e.pid(), d.TargetID)
+		if err != nil {
+			return "", err
+		}
+		if target.Kind == model.KindStory && target.Status != model.StatusDone {
+			unfinished = append(unfinished, fmt.Sprintf("%s (%s)", target.ID, target.Status))
+		}
+	}
+	if len(unfinished) > 0 {
+		return "", fmt.Errorf("start blocked: unfinished dependencies: %s", strings.Join(unfinished, ", "))
+	}
 	g, err := e.git()
 	if err != nil {
 		return "", err
 	}
+	if !g.IsIgnored(worktreeDir + "/probe") {
+		return "", fmt.Errorf("start blocked: %s/ is not git-ignored: add the line %q to .gitignore and commit it", worktreeDir, worktreeDir+"/")
+	}
 	branch := branchName(story.ID)
-	if err := g.EnsureFeatureBranch(branch, e.Project.BaseBranch); err != nil {
-		return "", fmt.Errorf("start blocked: %w", err)
+	wtPath := e.worktreePath(story.ID)
+	if _, err := os.Stat(wtPath); err != nil {
+		if err := g.WorktreeAdd(wtPath, branch, e.Project.BaseBranch); err != nil {
+			return "", fmt.Errorf("start blocked: %w", err)
+		}
 	}
 	if err := e.st.SetNodeStatus(e.pid(), story.ID, model.StatusInProgress); err != nil {
 		return "", err
 	}
-	e.st.AppendEvent(e.pid(), "transition", story.ID, "refined -> in_progress on "+branch)
-	return fmt.Sprintf("%s is in_progress; branch %s checked out (base %s)", story.ID, branch, e.Project.BaseBranch), nil
+	e.st.AppendEvent(e.pid(), "transition", story.ID, "refined -> in_progress in "+wtPath)
+	return fmt.Sprintf("%s is in_progress; worktree %s ready on branch %s (base %s) — do all work inside that directory", story.ID, wtPath, branch, e.Project.BaseBranch), nil
 }
 
 func (e *Engine) finish(story model.Node) (string, error) {
@@ -111,21 +144,30 @@ func (e *Engine) finish(story model.Node) (string, error) {
 		return "", err
 	}
 	branch := branchName(story.ID)
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return "", err
+	wtPath := e.worktreePath(story.ID)
+	if _, err := os.Stat(wtPath); err != nil {
+		return "", fmt.Errorf("finish blocked: story worktree %s is missing — run start again", wtPath)
 	}
-	if cur != branch {
-		return "", fmt.Errorf("finish blocked: on branch %q, expected %q", cur, branch)
-	}
-	if clean, err := g.IsClean(); err != nil {
+	wt := gitops.Git{Dir: wtPath}
+	if clean, err := wt.IsClean(); err != nil {
 		return "", err
 	} else if !clean {
-		return "", fmt.Errorf("finish blocked: worktree not clean, commit all changes first")
+		return "", fmt.Errorf("finish blocked: story worktree not clean, commit all changes first")
+	}
+	// Gate on the future merge result: everything tested below must contain
+	// the base tip, otherwise the merge commit itself was never exercised.
+	if upToDate, err := g.IsAncestor(e.Project.BaseBranch, branch); err != nil {
+		return "", err
+	} else if !upToDate {
+		return "", fmt.Errorf("finish blocked: %s is behind %s: merge or rebase %s into %s first, then finish again",
+			branch, e.Project.BaseBranch, e.Project.BaseBranch, branch)
 	}
 
+	if missing := e.missingPathsIn(story, wtPath); len(missing) > 0 {
+		return "", fmt.Errorf("finish blocked: declared paths missing in repo: %s — fix the code layout or the story's paths", strings.Join(missing, ", "))
+	}
 	if e.Project.LintCmd != "" {
-		if out, err := runShell(e.Project.RepoPath, e.Project.LintCmd); err != nil {
+		if out, err := runShell(wtPath, e.Project.LintCmd); err != nil {
 			return "", fmt.Errorf("finish blocked: lint failed (%s):\n%s", e.Project.LintCmd, tail(out, 40))
 		}
 	}
@@ -135,11 +177,11 @@ func (e *Engine) finish(story model.Node) (string, error) {
 	if e.Project.JUnitGlob == "" {
 		return "", fmt.Errorf("finish blocked: no junit_glob configured: run `trellis config %s --junit <glob>`", e.pid())
 	}
-	testOut, testErr := runShell(e.Project.RepoPath, e.Project.TestCmd)
+	testOut, testErr := runShell(wtPath, e.Project.TestCmd)
 	// The verdict comes from the parsed reports, not the exit code alone: a
 	// failing exit code with parseable reports still yields precise per-spec
 	// errors below.
-	cases, parseErr := testreport.ParseGlob(e.Project.RepoPath, e.Project.JUnitGlob)
+	cases, parseErr := testreport.ParseGlob(wtPath, e.Project.JUnitGlob)
 	if parseErr != nil {
 		if testErr != nil {
 			return "", fmt.Errorf("finish blocked: test command failed (%s):\n%s", e.Project.TestCmd, tail(testOut, 40))
@@ -160,19 +202,70 @@ func (e *Engine) finish(story model.Node) (string, error) {
 	if problems := testreport.Verify(specIDs, cases); len(problems) > 0 {
 		return "", fmt.Errorf("finish blocked: test evidence incomplete for %s:\n- %s", story.ID, strings.Join(problems, "\n- "))
 	}
+	// Verification passed: put the proving tests on record, spec by spec.
+	// Latest run replaces earlier evidence — current state, not history.
+	for _, id := range specIDs {
+		var names []string
+		for _, c := range testreport.Match(id, cases) {
+			names = append(names, c.FullName())
+		}
+		if err := e.st.SetEvidence(e.pid(), id, names); err != nil {
+			return "", err
+		}
+	}
 	if testErr != nil {
 		return "", fmt.Errorf("finish blocked: test command exited non-zero (%s) although all referenced specs pass — other tests are failing:\n%s", e.Project.TestCmd, tail(testOut, 40))
 	}
 
 	msg := fmt.Sprintf("Merge %s: %s (trellis finish)", branch, story.Title)
-	if err := g.MergeToBase(branch, e.Project.BaseBranch, msg); err != nil {
+	if err := g.MergeBranch(branch, e.Project.BaseBranch, msg); err != nil {
 		return "", fmt.Errorf("finish blocked: %w", err)
+	}
+	if err := g.WorktreeRemove(wtPath); err != nil {
+		return "", fmt.Errorf("merged, but removing worktree failed: %w", err)
+	}
+	if err := g.DeleteBranch(branch); err != nil {
+		return "", fmt.Errorf("merged, but deleting branch failed: %w", err)
 	}
 	if err := e.st.SetNodeStatus(e.pid(), story.ID, model.StatusDone); err != nil {
 		return "", err
 	}
 	e.st.AppendEvent(e.pid(), "transition", story.ID, "in_progress -> done, merged into "+e.Project.BaseBranch)
-	return fmt.Sprintf("%s is done: %d test specs verified green, %s merged into %s, branch deleted", story.ID, len(specIDs), branch, e.Project.BaseBranch), nil
+	return fmt.Sprintf("%s is done: %d test specs verified green, %s merged into %s, worktree and branch removed", story.ID, len(specIDs), branch, e.Project.BaseBranch), nil
+}
+
+// abort abandons an in_progress story: the feature branch is discarded and
+// the story falls back to refined — the spec survives, the work is dropped.
+// Integrity is not re-checked: nothing about the spec changed.
+func (e *Engine) abort(story model.Node) (string, error) {
+	if err := e.requireStatus(story, model.StatusInProgress, "abort"); err != nil {
+		return "", err
+	}
+	g, err := e.git()
+	if err != nil {
+		return "", err
+	}
+	branch := branchName(story.ID)
+	wtPath := e.worktreePath(story.ID)
+	if _, err := os.Stat(wtPath); err == nil {
+		wt := gitops.Git{Dir: wtPath}
+		if clean, err := wt.IsClean(); err != nil {
+			return "", err
+		} else if !clean {
+			return "", fmt.Errorf("abort blocked: story worktree not clean: commit or stash changes before aborting — work is never silently destroyed")
+		}
+		if err := g.WorktreeRemove(wtPath); err != nil {
+			return "", fmt.Errorf("abort blocked: %w", err)
+		}
+	}
+	if err := g.DeleteBranch(branch); err != nil {
+		return "", fmt.Errorf("abort blocked: %w", err)
+	}
+	if err := e.st.SetNodeStatus(e.pid(), story.ID, model.StatusRefined); err != nil {
+		return "", err
+	}
+	e.st.AppendEvent(e.pid(), "transition", story.ID, "in_progress -> refined (aborted, worktree and "+branch+" discarded)")
+	return fmt.Sprintf("%s aborted: worktree and branch %s discarded, story is refined again", story.ID, branch), nil
 }
 
 func runShell(dir, cmd string) (string, error) {

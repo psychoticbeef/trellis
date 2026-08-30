@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"trellis/internal/model"
+	"trellis/internal/store"
 )
 
 // freshness decides whether a node's approval is still valid. A node is fresh
@@ -41,6 +42,9 @@ func (e *Engine) freshness(n model.Node) (bool, []string, error) {
 		return false, nil, err
 	}
 	for _, d := range deps {
+		if d.PinnedHash == "" {
+			continue // sequencing edge: no freshness coupling
+		}
 		target, err := e.st.GetNode(e.pid(), d.TargetID)
 		if err != nil {
 			return false, nil, err
@@ -151,21 +155,29 @@ func (e *Engine) integrity(storyID string) ([]string, error) {
 
 // ---- reports ----
 
+type EvidenceInfo struct {
+	Tests      []string `json:"tests"`
+	RecordedAt string   `json:"recorded_at"`
+}
+
 type DepInfo struct {
-	Target string `json:"target"`
-	Fresh  bool   `json:"fresh"`
+	Target     string `json:"target"`
+	Fresh      bool   `json:"fresh"`
+	Sequencing bool   `json:"sequencing,omitempty"`
 }
 
 type TreeNode struct {
-	ID       string     `json:"id"`
-	Kind     string     `json:"kind"`
-	Title    string     `json:"title"`
-	Hash     string     `json:"content_hash"`
-	Fresh    bool       `json:"fresh"`
-	Problems []string   `json:"problems,omitempty"`
-	Covers   []string   `json:"covers,omitempty"`
-	Deps     []DepInfo  `json:"depends_on,omitempty"`
-	Children []TreeNode `json:"children,omitempty"`
+	ID       string        `json:"id"`
+	Kind     string        `json:"kind"`
+	Title    string        `json:"title"`
+	Hash     string        `json:"content_hash"`
+	Fresh    bool          `json:"fresh"`
+	Problems []string      `json:"problems,omitempty"`
+	Covers   []string      `json:"covers,omitempty"`
+	Paths    []string      `json:"paths,omitempty"`
+	Deps     []DepInfo     `json:"depends_on,omitempty"`
+	Evidence *EvidenceInfo `json:"evidence,omitempty"`
+	Children []TreeNode    `json:"children,omitempty"`
 }
 
 type ACInfo struct {
@@ -238,12 +250,23 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 	if err != nil {
 		return TreeNode{}, err
 	}
-	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers}
+	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers, Paths: n.Paths}
+	if model.TestSpecKinds[n.Kind] {
+		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
+			return TreeNode{}, err
+		} else if ok {
+			tn.Evidence = &EvidenceInfo{Tests: ev.Tests, RecordedAt: ev.RecordedAt}
+		}
+	}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {
 		return TreeNode{}, err
 	}
 	for _, d := range deps {
+		if d.PinnedHash == "" {
+			tn.Deps = append(tn.Deps, DepInfo{Target: d.TargetID, Fresh: true, Sequencing: true})
+			continue
+		}
 		target, err := e.st.GetNode(e.pid(), d.TargetID)
 		if err != nil {
 			return TreeNode{}, err
@@ -269,18 +292,20 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 }
 
 type NodeReport struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	ParentID string    `json:"parent_id,omitempty"`
-	Title    string    `json:"title"`
-	Body     string    `json:"body"`
-	Covers   []string  `json:"covers,omitempty"`
-	Status   string    `json:"status,omitempty"`
-	Hash     string    `json:"content_hash"`
-	Fresh    bool      `json:"fresh"`
-	Problems []string  `json:"problems,omitempty"`
-	Deps     []NodeDep `json:"depends_on,omitempty"`
-	ACs      []ACInfo  `json:"acceptance_criteria,omitempty"`
+	ID       string        `json:"id"`
+	Kind     string        `json:"kind"`
+	ParentID string        `json:"parent_id,omitempty"`
+	Title    string        `json:"title"`
+	Body     string        `json:"body"`
+	Covers   []string      `json:"covers,omitempty"`
+	Paths    []string      `json:"paths,omitempty"`
+	Status   string        `json:"status,omitempty"`
+	Hash     string        `json:"content_hash"`
+	Fresh    bool          `json:"fresh"`
+	Problems []string      `json:"problems,omitempty"`
+	Deps     []NodeDep     `json:"depends_on,omitempty"`
+	Evidence *EvidenceInfo `json:"evidence,omitempty"`
+	ACs      []ACInfo      `json:"acceptance_criteria,omitempty"`
 }
 
 type NodeDep struct {
@@ -288,6 +313,7 @@ type NodeDep struct {
 	TargetHash  string `json:"target_content_hash"`
 	TargetTitle string `json:"target_title"`
 	Fresh       bool   `json:"fresh"`
+	Sequencing  bool   `json:"sequencing,omitempty"`
 }
 
 // Node returns the full content of one node, including the hashes needed to
@@ -307,7 +333,14 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 	}
 	r := NodeReport{
 		ID: n.ID, Kind: string(n.Kind), ParentID: n.ParentID, Title: n.Title, Body: n.Body,
-		Covers: n.Covers, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+		Covers: n.Covers, Paths: n.Paths, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+	}
+	if model.TestSpecKinds[n.Kind] {
+		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
+			return NodeReport{}, err
+		} else if ok {
+			r.Evidence = &EvidenceInfo{Tests: ev.Tests, RecordedAt: ev.RecordedAt}
+		}
 	}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {
@@ -321,6 +354,10 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 		targetHash, err := e.hashOf(target)
 		if err != nil {
 			return NodeReport{}, err
+		}
+		if d.PinnedHash == "" {
+			r.Deps = append(r.Deps, NodeDep{Target: d.TargetID, TargetHash: targetHash, TargetTitle: target.Title, Fresh: true, Sequencing: true})
+			continue
 		}
 		r.Deps = append(r.Deps, NodeDep{Target: d.TargetID, TargetHash: targetHash, TargetTitle: target.Title, Fresh: d.PinnedHash == targetHash})
 	}
@@ -350,14 +387,20 @@ type CCSummary struct {
 }
 
 type Overview struct {
-	Project      string         `json:"project"`
-	Stories      []StorySummary `json:"stories"`
-	CrossCutting []CCSummary    `json:"cross_cutting"`
-	StaleNodes   []string       `json:"stale_nodes"`
+	Project      string          `json:"project"`
+	Stories      []StorySummary  `json:"stories"`
+	CrossCutting []CCSummary     `json:"cross_cutting"`
+	Glossary     []store.TermDef `json:"glossary"`
+	StaleNodes   []string        `json:"stale_nodes"`
 }
 
 func (e *Engine) Overview() (Overview, error) {
-	o := Overview{Project: e.Project.Name, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, StaleNodes: []string{}}
+	o := Overview{Project: e.Project.Name, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, Glossary: []store.TermDef{}, StaleNodes: []string{}}
+	if terms, err := e.st.ListTerms(e.pid()); err != nil {
+		return o, err
+	} else if terms != nil {
+		o.Glossary = terms
+	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {
 		return o, err

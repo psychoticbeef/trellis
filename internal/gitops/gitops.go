@@ -3,8 +3,11 @@
 package gitops
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,6 +24,14 @@ func (g Git) run(args ...string) (string, error) {
 		return text, fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, text)
 	}
 	return text, nil
+}
+
+// Run executes a git command in the repo and returns its trimmed output.
+func (g Git) Run(args ...string) (string, error) { return g.run(args...) }
+
+// WriteFile writes a file relative to the repo root.
+func (g Git) WriteFile(rel, content string) error {
+	return os.WriteFile(filepath.Join(g.Dir, rel), []byte(content), 0o644)
 }
 
 func (g Git) IsRepo() bool {
@@ -69,33 +80,72 @@ func (g Git) EnsureFeatureBranch(branch, base string) error {
 	return err
 }
 
-// MergeToBase merges the feature branch into base with --no-ff and deletes the
-// feature branch. On merge failure it aborts and returns to the feature branch.
-func (g Git) MergeToBase(branch, base, message string) error {
+// IsAncestor reports whether ancestor is an ancestor of (or equal to) the
+// descendant ref.
+func (g Git) IsAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = g.Dir
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", ancestor, descendant, err)
+}
+
+// MergeBranch merges a feature branch into base with --no-ff via the main
+// worktree, which must be clean; it is checked out on base first. On merge
+// failure the merge is aborted and the main worktree stays on base.
+func (g Git) MergeBranch(branch, base, message string) error {
 	clean, err := g.IsClean()
 	if err != nil {
 		return err
 	}
 	if !clean {
-		return fmt.Errorf("worktree not clean: commit all changes before finishing")
-	}
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	if cur != branch {
-		return fmt.Errorf("on branch %q, expected feature branch %q", cur, branch)
+		return fmt.Errorf("main worktree not clean: commit or stash its changes before finishing")
 	}
 	if _, err := g.run("checkout", base); err != nil {
 		return err
 	}
 	if _, err := g.run("merge", "--no-ff", "-m", message, branch); err != nil {
 		_, _ = g.run("merge", "--abort")
-		_, _ = g.run("checkout", branch)
-		return fmt.Errorf("merge into %s failed, aborted and returned to %s: %w", base, branch, err)
-	}
-	if _, err := g.run("branch", "-d", branch); err != nil {
-		return fmt.Errorf("merged, but deleting branch failed: %w", err)
+		return fmt.Errorf("merge into %s failed and was aborted: %w", base, err)
 	}
 	return nil
+}
+
+// WorktreeAdd creates a worktree at path, reusing an existing branch or
+// creating it fresh from base.
+func (g Git) WorktreeAdd(path, branch, base string) error {
+	if g.BranchExists(branch) {
+		_, err := g.run("worktree", "add", path, branch)
+		return err
+	}
+	if !g.BranchExists(base) {
+		return fmt.Errorf("base branch %q does not exist: create it first (git branch %s)", base, base)
+	}
+	_, err := g.run("worktree", "add", "-b", branch, path, base)
+	return err
+}
+
+// WorktreeRemove removes a worktree registration and its directory.
+func (g Git) WorktreeRemove(path string) error {
+	_, err := g.run("worktree", "remove", "--force", path)
+	return err
+}
+
+// DeleteBranch force-deletes a branch (used after its worktree is gone).
+func (g Git) DeleteBranch(branch string) error {
+	_, err := g.run("branch", "-D", branch)
+	return err
+}
+
+// IsIgnored reports whether a repo-relative path is covered by .gitignore.
+func (g Git) IsIgnored(rel string) bool {
+	cmd := exec.Command("git", "check-ignore", "-q", rel)
+	cmd.Dir = g.Dir
+	return cmd.Run() == nil
 }

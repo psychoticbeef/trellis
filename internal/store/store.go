@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS counters (
 	n          INTEGER NOT NULL,
 	PRIMARY KEY (project_id, scope)
 );
+CREATE TABLE IF NOT EXISTS evidence (
+	project_id  TEXT NOT NULL,
+	node_id     TEXT NOT NULL,
+	tests       TEXT NOT NULL,
+	recorded_at TEXT NOT NULL,
+	PRIMARY KEY (project_id, node_id)
+);
+CREATE TABLE IF NOT EXISTS glossary (
+	project_id TEXT NOT NULL,
+	term       TEXT NOT NULL,
+	definition TEXT NOT NULL,
+	PRIMARY KEY (project_id, term)
+);
 CREATE TABLE IF NOT EXISTS events (
 	seq        INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_id TEXT NOT NULL,
@@ -92,7 +105,33 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	// Additive migration for stores created before the paths column existed.
+	if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN paths TEXT NOT NULL DEFAULT '[]'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate paths: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN release_branch TEXT NOT NULL DEFAULT 'main'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate release_branch: %w", err)
+	}
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS specs_fts USING fts5(project_id UNINDEXED, node_id UNINDEXED, body)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate fts: %w", err)
+	}
+	st := &Store{db: db}
+	// Rebuild the index for stores that predate FTS.
+	var ftsRows, nodeRows int
+	db.QueryRow(`SELECT count(*) FROM specs_fts`).Scan(&ftsRows)
+	db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodeRows)
+	if ftsRows == 0 && nodeRows > 0 {
+		if err := st.reindexAll(); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("rebuild fts: %w", err)
+		}
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -102,25 +141,29 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 // ---- projects ----
 
 type Project struct {
-	ID         string
-	Name       string
-	RepoPath   string
-	BaseBranch string
-	LintCmd    string
-	TestCmd    string
-	JUnitGlob  string
+	ID            string
+	Name          string
+	RepoPath      string
+	BaseBranch    string
+	ReleaseBranch string
+	LintCmd       string
+	TestCmd       string
+	JUnitGlob     string
 }
 
 func (s *Store) CreateProject(p Project) error {
-	_, err := s.db.Exec(`INSERT INTO projects (id, name, repo_path, base_branch, lint_cmd, test_cmd, junit_glob, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.RepoPath, p.BaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
+	if p.ReleaseBranch == "" {
+		p.ReleaseBranch = "main"
+	}
+	_, err := s.db.Exec(`INSERT INTO projects (id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
 	return err
 }
 
 func (s *Store) GetProject(id string) (Project, error) {
 	var p Project
-	err := s.db.QueryRow(`SELECT id, name, repo_path, base_branch, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
+	err := s.db.QueryRow(`SELECT id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, fmt.Errorf("project %q: %w", id, ErrNotFound)
 	}
@@ -128,13 +171,13 @@ func (s *Store) GetProject(id string) (Project, error) {
 }
 
 func (s *Store) UpdateProject(p Project) error {
-	_, err := s.db.Exec(`UPDATE projects SET name=?, repo_path=?, base_branch=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
-		p.Name, p.RepoPath, p.BaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
+	_, err := s.db.Exec(`UPDATE projects SET name=?, repo_path=?, base_branch=?, release_branch=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
+		p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
 	return err
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id, name, repo_path, base_branch, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +185,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -179,18 +222,21 @@ func (s *Store) NextID(projectID, scope string) (int, error) {
 
 // ---- nodes ----
 
-const nodeCols = `id, project_id, kind, parent_id, title, body, covers, status, approved_content_hash, approved_parent_hash, created_at, updated_at`
+const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, approved_content_hash, approved_parent_hash, created_at, updated_at`
 
 func scanNode(row interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
-	var covers, created, updated string
-	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &n.Status,
+	var covers, paths, created, updated string
+	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &paths, &n.Status,
 		&n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
 	if err != nil {
 		return n, err
 	}
 	if err := json.Unmarshal([]byte(covers), &n.Covers); err != nil {
 		return n, fmt.Errorf("node %s: bad covers: %w", n.ID, err)
+	}
+	if err := json.Unmarshal([]byte(paths), &n.Paths); err != nil {
+		return n, fmt.Errorf("node %s: bad paths: %w", n.ID, err)
 	}
 	n.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	n.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
@@ -206,9 +252,26 @@ func coversJSON(covers []string) string {
 }
 
 func (s *Store) InsertNode(n model.Node) error {
-	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), n.Status,
+	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), stringsJSON(n.Paths), n.Status,
 		n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(n.ProjectID, n.ID)
+}
+
+func stringsJSON(v []string) string {
+	if v == nil {
+		v = []string{}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func (s *Store) SetNodePaths(projectID, id string, paths []string) error {
+	_, err := s.db.Exec(`UPDATE nodes SET paths=?, updated_at=? WHERE project_id=? AND id=?`,
+		stringsJSON(paths), now(), projectID, id)
 	return err
 }
 
@@ -225,7 +288,10 @@ func (s *Store) GetNode(projectID, id string) (model.Node, error) {
 func (s *Store) UpdateNodeContent(n model.Node) error {
 	_, err := s.db.Exec(`UPDATE nodes SET title=?, body=?, covers=?, updated_at=? WHERE project_id=? AND id=?`,
 		n.Title, n.Body, coversJSON(n.Covers), now(), n.ProjectID, n.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(n.ProjectID, n.ID)
 }
 
 func (s *Store) SetNodeStatus(projectID, id, status string) error {
@@ -244,8 +310,13 @@ func (s *Store) DeleteNode(projectID, id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`DELETE FROM deps WHERE project_id=? AND node_id=?`, projectID, id)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM deps WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
+		return err
+	}
+	return s.DeleteEvidence(projectID, id)
 }
 
 func (s *Store) listNodes(query string, args ...any) ([]model.Node, error) {
@@ -282,7 +353,10 @@ func (s *Store) ListChildren(projectID, parentID string) ([]model.Node, error) {
 func (s *Store) InsertAC(projectID string, ac model.AC) error {
 	_, err := s.db.Exec(`INSERT INTO acceptance_criteria (id, project_id, story_id, given_, when_, then_, position) VALUES (?,?,?,?,?,?,?)`,
 		ac.ID, projectID, ac.StoryID, ac.Given, ac.When, ac.Then, ac.Position)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(projectID, ac.StoryID)
 }
 
 func (s *Store) UpdateAC(projectID string, ac model.AC) error {
@@ -294,10 +368,12 @@ func (s *Store) UpdateAC(projectID string, ac model.AC) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("acceptance criterion %q: %w", ac.ID, ErrNotFound)
 	}
-	return nil
+	return s.reindexNode(projectID, ac.StoryID)
 }
 
 func (s *Store) DeleteAC(projectID, id string) error {
+	var storyID string
+	s.db.QueryRow(`SELECT story_id FROM acceptance_criteria WHERE project_id=? AND id=?`, projectID, id).Scan(&storyID)
 	res, err := s.db.Exec(`DELETE FROM acceptance_criteria WHERE project_id=? AND id=?`, projectID, id)
 	if err != nil {
 		return err
@@ -305,7 +381,7 @@ func (s *Store) DeleteAC(projectID, id string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("acceptance criterion %q: %w", id, ErrNotFound)
 	}
-	return nil
+	return s.reindexNode(projectID, storyID)
 }
 
 func (s *Store) GetAC(projectID, id string) (model.AC, error) {
@@ -392,6 +468,88 @@ func (s *Store) listDeps(query string, args ...any) ([]model.Dep, error) {
 	return out, rows.Err()
 }
 
+// ---- evidence ----
+
+type Evidence struct {
+	Tests      []string
+	RecordedAt string
+}
+
+// SetEvidence records the proving tests for a spec node, replacing any
+// earlier record — evidence is current state, not history.
+func (s *Store) SetEvidence(projectID, nodeID string, tests []string) error {
+	_, err := s.db.Exec(`INSERT INTO evidence (project_id, node_id, tests, recorded_at) VALUES (?,?,?,?)
+		ON CONFLICT(project_id, node_id) DO UPDATE SET tests=excluded.tests, recorded_at=excluded.recorded_at`,
+		projectID, nodeID, stringsJSON(tests), now())
+	return err
+}
+
+// GetEvidence returns the last recorded evidence, or ok=false when none exists.
+func (s *Store) GetEvidence(projectID, nodeID string) (Evidence, bool, error) {
+	var ev Evidence
+	var tests string
+	err := s.db.QueryRow(`SELECT tests, recorded_at FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID).
+		Scan(&tests, &ev.RecordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ev, false, nil
+	}
+	if err != nil {
+		return ev, false, err
+	}
+	if err := json.Unmarshal([]byte(tests), &ev.Tests); err != nil {
+		return ev, false, err
+	}
+	return ev, true, nil
+}
+
+func (s *Store) DeleteEvidence(projectID, nodeID string) error {
+	_, err := s.db.Exec(`DELETE FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID)
+	return err
+}
+
+// ---- glossary ----
+
+type TermDef struct {
+	Term       string `json:"term"`
+	Definition string `json:"definition"`
+}
+
+// DefineTerm creates or updates a glossary entry.
+func (s *Store) DefineTerm(projectID, term, definition string) error {
+	_, err := s.db.Exec(`INSERT INTO glossary (project_id, term, definition) VALUES (?,?,?)
+		ON CONFLICT(project_id, term) DO UPDATE SET definition=excluded.definition`,
+		projectID, term, definition)
+	return err
+}
+
+func (s *Store) DeleteTerm(projectID, term string) error {
+	res, err := s.db.Exec(`DELETE FROM glossary WHERE project_id=? AND term=?`, projectID, term)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("glossary term %q: %w", term, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *Store) ListTerms(projectID string) ([]TermDef, error) {
+	rows, err := s.db.Query(`SELECT term, definition FROM glossary WHERE project_id=? ORDER BY term COLLATE NOCASE`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TermDef
+	for rows.Next() {
+		var td TermDef
+		if err := rows.Scan(&td.Term, &td.Definition); err != nil {
+			return nil, err
+		}
+		out = append(out, td)
+	}
+	return out, rows.Err()
+}
+
 // ---- events ----
 
 type Event struct {
@@ -423,4 +581,127 @@ func (s *Store) ListEvents(projectID string, limit int) ([]Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ---- search (FTS5) ----
+
+// buildFTSQuery turns free text into a safe FTS5 query: terms are quoted so
+// operators and punctuation stay literal, joined with AND, and the last term
+// matches as a word prefix. Terms without any letter or digit are dropped.
+func buildFTSQuery(q string) string {
+	terms := strings.Fields(q)
+	var parts []string
+	for _, t := range terms {
+		hasWord := false
+		for _, r := range t {
+			if ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || r > 127 {
+				hasWord = true
+				break
+			}
+		}
+		if !hasWord {
+			continue
+		}
+		parts = append(parts, `"`+strings.ReplaceAll(t, `"`, `""`)+`"`)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	parts[len(parts)-1] += "*"
+	return strings.Join(parts, " AND ")
+}
+
+type FTSHit struct {
+	NodeID  string
+	Snippet string
+}
+
+// SearchFTS returns matching nodes ordered by BM25 relevance with a snippet
+// around the matches. AC text is folded into its story's index row.
+func (s *Store) SearchFTS(projectID, query string) ([]FTSHit, error) {
+	match := buildFTSQuery(query)
+	if match == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT node_id, snippet(specs_fts, 2, '', '', '…', 12)
+		FROM specs_fts WHERE specs_fts MATCH ? AND project_id=? ORDER BY bm25(specs_fts)`, match, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FTSHit
+	for rows.Next() {
+		var h FTSHit
+		if err := rows.Scan(&h.NodeID, &h.Snippet); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// reindexNode rewrites a node's FTS row from title, body and (for stories)
+// its acceptance-criterion text.
+func (s *Store) reindexNode(projectID, nodeID string) error {
+	if nodeID == "" {
+		return nil
+	}
+	n, err := s.GetNode(projectID, nodeID)
+	if errors.Is(err, ErrNotFound) {
+		_, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, nodeID)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	text := n.Title + "\n" + n.Body
+	if n.Kind == model.KindStory {
+		acs, err := s.ListACs(projectID, nodeID)
+		if err != nil {
+			return err
+		}
+		for _, ac := range acs {
+			text += "\n" + ac.Given + " " + ac.When + " " + ac.Then
+		}
+	}
+	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, nodeID); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO specs_fts (project_id, node_id, body) VALUES (?,?,?)`, projectID, nodeID, text)
+	return err
+}
+
+func (s *Store) reindexAll() error {
+	rows, err := s.db.Query(`SELECT project_id, id FROM nodes`)
+	if err != nil {
+		return err
+	}
+	type key struct{ p, n string }
+	var keys []key
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.p, &k.n); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	for _, k := range keys {
+		if err := s.reindexNode(k.p, k.n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MaxEventSeq returns the highest event sequence for a project (0 when none).
+// The live board polls this to detect changes across processes.
+func (s *Store) MaxEventSeq(projectID string) (int64, error) {
+	var seq sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(seq) FROM events WHERE project_id=?`, projectID).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	return seq.Int64, nil
 }

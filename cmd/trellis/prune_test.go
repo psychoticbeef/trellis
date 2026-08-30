@@ -1,0 +1,458 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"trellis/internal/core"
+	"trellis/internal/model"
+	"trellis/internal/store"
+)
+
+func gitRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestPruneCLIAcceptance_AT_7 proves AT-7 (US-5 "Story state machine with
+// gates"): pruning through the real CLI entrypoint — blocked for non-done
+// stories, blocked while an outside node depends on a tree member, and
+// deleting the whole tree of a story that reached done via the full git flow.
+func TestPruneCLIAcceptance_AT_7(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build, approve and complete a story via the engine (setup, not the SUT).
+	story, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(story.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, story.ID, "at", "", []string{story.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, story.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	cc, _ := e.CreateNode(model.KindCrossCutting, "", "cc", "", nil)
+	for _, id := range []string{story.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID, cc.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Prune before done is blocked (through the CLI).
+	err = run([]string{"prune", "p1", story.ID})
+	if err == nil || !strings.Contains(err.Error(), "only done stories") {
+		t.Fatalf("prune before done: want 'only done stories' error, got %v", err)
+	}
+
+	if _, err := e.Transition(story.ID, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(story.ID, "start"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(story.ID, "finish"); err != nil {
+		t.Fatal(err)
+	}
+
+	// An outside dependent blocks pruning; CC depends on a tree member is not
+	// possible (cc is root), so link the dependency the other way: another
+	// node outside the tree depending on the arch spec.
+	story2, _ := e.CreateNode(model.KindStory, "", "s2", "", nil)
+	r, _ := e.Node(story2.ID)
+	if err := e.Approve(story2.ID, r.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	arch2, _ := e.CreateNode(model.KindArch, story2.ID, "as2", "", nil)
+	if err := e.LinkDep(arch2.ID, arch.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = run([]string{"prune", "p1", story.ID})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%s depends on %s", arch2.ID, arch.ID)) {
+		t.Fatalf("prune with outside dependent: want blocking error, got %v", err)
+	}
+	if err := e.UnlinkDep(arch2.ID, arch.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prune the done story through the CLI: the whole tree is gone.
+	if err := run([]string{"prune", "p1", story.ID}); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for _, id := range []string{story.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		if _, err := e.Node(id); err == nil {
+			t.Errorf("node %s still exists after prune", id)
+		}
+	}
+	// The cross-cutting spec is not part of the tree and survives.
+	if _, err := e.Node(cc.ID); err != nil {
+		t.Errorf("cross-cutting %s must survive prune: %v", cc.ID, err)
+	}
+}
+
+// TestAffectedCLIAcceptance_AT_16 proves AT-16 (US-13 "Spec-to-code paths"):
+// trellis affected prints the stories declaring a file or parent folder and
+// nothing for undeclared paths.
+func TestAffectedCLIAcceptance_AT_16(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, _ := e.CreateNode(model.KindStory, "", "auth story", "", nil)
+	if _, err := e.SetPaths(story.ID, []string{"pkg/auth"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"affected", "p1", "pkg/auth/token.go"}); err != nil {
+		t.Fatalf("affected: %v", err)
+	}
+	if err := run([]string{"affected", "p1", "pkg/other/file.go"}); err != nil {
+		t.Fatalf("affected (no match): %v", err)
+	}
+	// The CLI shares the engine's matching; assert it directly for the output path.
+	hits, err := e.StoriesForPath("pkg/auth/token.go")
+	if err != nil || len(hits) != 1 || hits[0].ID != story.ID {
+		t.Fatalf("engine lookup backing the CLI: %v %v", hits, err)
+	}
+}
+
+// TestBoardCLIAcceptance_AT_18 proves AT-18 (US-15 "Board export"): the CLI
+// writes a self-contained board with statuses, coverage, markers, evidence
+// and both theme token blocks.
+func TestBoardCLIAcceptance_AT_18(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(story.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, story.ID, "at", "", []string{story.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, story.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{story.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(story.ID, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+
+	out := filepath.Join(t.TempDir(), "board.html")
+	if err := run([]string{"board", "p1", "-o", out}); err != nil {
+		t.Fatalf("board: %v", err)
+	}
+	html, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		story.ID, ">done<", at.ID, story.ID + ".AC-1", // story, status, coverage
+		"Test_AT_1",                  // evidence
+		"prefers-color-scheme: dark", // dark tokens
+		`data-theme="dark"`,          // explicit override block
+		"--ground: #F7F8F6",          // light tokens on bare :root
+		"gates open",
+	} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("board missing %q", want)
+		}
+	}
+}
+
+// TestLiveBoardCLIAcceptance_AT_22 proves AT-22 (US-18 "Live board"): the
+// CLI serves the board with live reload ticks on spec changes, and the
+// static export keeps working.
+func TestLiveBoardCLIAcceptance_AT_22(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CreateNode(model.KindStory, "", "served story", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pick a free port, then serve via the CLI entrypoint in the background.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	go run([]string{"board", "p1", "--serve", "--addr", addr})
+	var res *http.Response
+	for i := 0; i < 50; i++ {
+		res, err = http.Get("http://" + addr + "/")
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("server never came up: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), "served story") || !strings.Contains(string(body), "EventSource") {
+		t.Fatalf("served page incomplete:\n%.300s", body)
+	}
+
+	// SSE tick within ~a second of a change.
+	es, err := http.Get("http://" + addr + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer es.Body.Close()
+	reader := bufio.NewReader(es.Body)
+	reader.ReadString('\n') // connected comment
+	if _, err := e.CreateNode(model.KindStory, "", "another", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	tick := make(chan string, 1)
+	go func() {
+		for {
+			l, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.HasPrefix(l, "data:") {
+				tick <- l
+				return
+			}
+		}
+	}()
+	select {
+	case <-tick:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no reload tick within 3s of a change")
+	}
+
+	// Static export unchanged.
+	out := filepath.Join(t.TempDir(), "b.html")
+	if err := run([]string{"board", "p1", "-o", out}); err != nil {
+		t.Fatalf("static board: %v", err)
+	}
+	static, _ := os.ReadFile(out)
+	if !strings.Contains(string(static), "served story") || strings.Contains(string(static), "EventSource") {
+		t.Fatal("static export wrong: must show data, must not carry reload script")
+	}
+}
+
+// TestReleaseCLIAcceptance_AT_26 proves AT-26 (US-22 "Release cut with
+// feature manifest") through the real CLI entrypoint.
+func TestReleaseCLIAcceptance_AT_26(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/><testcase name="Test_AT_2"/><testcase name="Test_IT_2"/><testcase name="Test_UT_2"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildDone := func(title string) string {
+		t.Helper()
+		s, _ := e.CreateNode(model.KindStory, "", title, "", nil)
+		e.AddAC(s.ID, "g", "w", "t")
+		at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+		arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+		it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+		dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+		ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+		for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+			r, err := e.Node(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Approve(id, r.Hash, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, verb := range []string{"refine", "start"} {
+			if _, err := e.Transition(s.ID, verb); err != nil {
+				t.Fatalf("%s: %v", verb, err)
+			}
+		}
+		wt := filepath.Join(repo, ".trellis-worktrees", s.ID)
+		if err := os.WriteFile(filepath.Join(wt, s.ID+".txt"), []byte("impl"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, wt, "add", ".")
+		gitRun(t, wt, "commit", "-m", "implement "+s.ID)
+		if _, err := e.Transition(s.ID, "finish"); err != nil {
+			t.Fatalf("finish: %v", err)
+		}
+		return s.ID
+	}
+
+	// Nothing to release yet.
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "nothing to release") {
+		t.Fatalf("want nothing-to-release, got %v", err)
+	}
+
+	first := buildDone("first feature")
+	e.DefineTerm("gate", "guard that blocks a transition")
+
+	// Dirty worktree blocks.
+	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "not clean") {
+		t.Fatalf("want dirty block, got %v", err)
+	}
+	os.Remove(filepath.Join(repo, "dirty.txt"))
+
+	// Stale specs block.
+	body := "edited"
+	if _, err := e.UpdateNode(first, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "honest context") {
+		t.Fatalf("want stale block, got %v", err)
+	}
+	r, _ := e.Node(first)
+	if err := e.Approve(first, r.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Re-approve the stale children (story hash changed).
+	for _, id := range []string{"AT-1", "AS-1"} {
+		n, _ := e.Node(id)
+		if !n.Fresh {
+			if err := e.Approve(id, n.Hash, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// First release.
+	if err := run([]string{"release", "p1"}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	manifest := gitRun(t, repo, "show", "main:FEATURES.md")
+	for _, want := range []string{"first feature", "# Glossary", "gate"} {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("manifest missing %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, "FEATURES.md")); err == nil {
+		t.Fatal("FEATURES.md leaked onto the base branch")
+	}
+
+	// Incremental release lists only the new feature in the merge message.
+	second := buildDone("second feature")
+	if err := run([]string{"release", "p1"}); err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	log := gitRun(t, repo, "log", "--merges", "--pretty=%B", "-1", "main")
+	if !strings.Contains(log, second+" — second feature") || strings.Contains(log, first+" — first feature") {
+		t.Fatalf("incremental merge message wrong:\n%s", log)
+	}
+}

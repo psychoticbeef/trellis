@@ -76,6 +76,7 @@ type Node struct {
 	Title     string
 	Body      string
 	Covers    []string // acceptance_test only: AC ids this test proves
+	Paths     []string // story only: repo-relative files/folders realizing it; metadata, never hashed
 	Status    string   // story only
 	// Approval bookkeeping. Empty = never approved.
 	ApprovedContentHash string
