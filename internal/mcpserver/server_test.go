@@ -18,15 +18,21 @@ import (
 // backed by a real store — the exact surface an agent sees.
 func client(t *testing.T) *mcp.ClientSession {
 	t.Helper()
+	return clientFor(t, store.Project{ID: "p1", Name: "test", BaseBranch: "develop"})
+}
+
+// clientFor is client with full control over the project config (repo, gates).
+func clientFor(t *testing.T, p store.Project) *mcp.ClientSession {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "trellis.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if err := st.CreateProject(store.Project{ID: "p1", Name: "test", BaseBranch: "develop"}); err != nil {
+	if err := st.CreateProject(p); err != nil {
 		t.Fatal(err)
 	}
-	engine, err := core.NewEngine(st, "p1")
+	engine, err := core.NewEngine(st, p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

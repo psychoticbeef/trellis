@@ -43,7 +43,7 @@ func reportXML(passing ...string) string {
 	return b.String()
 }
 
-func TestGitFlow(t *testing.T) {
+func TestGitFlow_IT_6(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
@@ -113,7 +113,7 @@ func TestGitFlow(t *testing.T) {
 	}
 }
 
-func TestStartRequiresCleanWorktreeAndBase(t *testing.T) {
+func TestStartRequiresCleanWorktreeAndBase_IT_6(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "main") // no develop branch
