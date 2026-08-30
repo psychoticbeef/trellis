@@ -3,6 +3,7 @@ package mcpserver_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -826,5 +827,47 @@ func TestSchemaLintIntegration_IT_30(t *testing.T) {
 		Arguments: map[string]any{"query": "zzz-nothing"}})
 	if got := strings.TrimSpace(text(res)); got != `{"hits":[]}` {
 		t.Fatalf("empty hits envelope = %q", got)
+	}
+}
+
+// TestNextAcceptance_AT_39 proves AT-39 (US-35 "Next story") through MCP:
+// candidates, blocked with dependency status, empty answer.
+func TestNextAcceptance_AT_39(t *testing.T) {
+	cs := client(t)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "next_story", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("next_story: %v %s", err, text(res))
+	}
+	var empty struct {
+		Candidates []any `json:"candidates"`
+		Blocked    []any `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &empty); err != nil ||
+		empty.Candidates == nil || empty.Blocked == nil ||
+		len(empty.Candidates)+len(empty.Blocked) != 0 {
+		t.Fatalf("empty backlog envelope: %q (%v)", text(res), err)
+	}
+
+	free, _, _, _, _, _ := fullTreeMCP(t, cs)
+	waiting, _, _, _, _, _ := fullTreeMCP(t, cs)
+	pre := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "prereq"})["id"].(string)
+	call(t, cs, "link_dependency", map[string]any{"node_id": waiting, "target_id": pre})
+	for _, s := range []string{free, waiting} {
+		call(t, cs, "transition", map[string]any{"story_id": s, "action": "refine"})
+	}
+	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "next_story", Arguments: map[string]any{}})
+	var out struct {
+		Candidates []map[string]any `json:"candidates"`
+		Blocked    []map[string]any `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Candidates) != 1 || out.Candidates[0]["id"] != free {
+		t.Fatalf("candidates: %v", out.Candidates)
+	}
+	if len(out.Blocked) != 1 || out.Blocked[0]["id"] != waiting ||
+		!strings.Contains(fmt.Sprint(out.Blocked[0]["waiting_on"]), pre+" (todo)") {
+		t.Fatalf("blocked: %v", out.Blocked)
 	}
 }

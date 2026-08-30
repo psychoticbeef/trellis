@@ -103,6 +103,9 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_term",
 		Description: "Remove a glossary term."},
 		s.deleteTerm)
+	mcp.AddTool(srv, &mcp.Tool{Name: "next_story",
+		Description: "The next startable stories: refined with all sequencing dependencies done, plus refined stories still blocked (with their unfinished dependencies)."},
+		s.nextStory)
 	mcp.AddTool(srv, &mcp.Tool{Name: "audit",
 		Description: "Bidirectional repo-wide validation: re-verifies every done story's tests and paths, flags tests referencing nonexistent specs (violations), lists unbound tests and unclaimed files (informational). Runs the test command; never mutates."},
 		s.audit)
@@ -202,6 +205,11 @@ type descIn struct {
 type termIn struct {
 	Term       string `json:"term"`
 	Definition string `json:"definition,omitempty" jsonschema:"required for define_term; max 240 chars"`
+}
+
+type nextOut struct {
+	Candidates []core.StorySummary `json:"candidates"`
+	Blocked    []core.BlockedStory `json:"blocked"`
 }
 
 type okOut struct {
@@ -365,6 +373,11 @@ func (s *Server) deleteTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn
 		return nil, okOut{}, err
 	}
 	return nil, okOut{Message: "term " + in.Term + " deleted"}, nil
+}
+
+func (s *Server) nextStory(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, nextOut, error) {
+	c, b, err := s.engine.NextStories()
+	return nil, nextOut{Candidates: c, Blocked: b}, err
 }
 
 func (s *Server) audit(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, core.AuditReport, error) {

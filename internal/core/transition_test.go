@@ -1353,3 +1353,77 @@ func TestAuditIntegration_IT_33(t *testing.T) {
 		t.Errorf("unbound info missing: %v", rep.Infos)
 	}
 }
+
+// TestCoverageDelta_IT_36 / _UT_37 / AT-40: two finishes with moving
+// coverage — first without delta, second with the signed delta, overview
+// mirroring it, meta surviving snapshot replacement.
+func TestCoverageDelta_IT_36(t *testing.T) { coverageDeltaScenario(t) }
+
+// TestCoverageDeltaUnit_UT_37 proves UT-37 (DD-37 "Delta plumbing") via the
+// same scenario: sign, nil-on-first, meta persistence.
+func TestCoverageDeltaUnit_UT_37(t *testing.T) { coverageDeltaScenario(t) }
+
+// TestCoverageDeltaAcceptance_AT_40 proves AT-40 (US-36 "Coverage delta").
+func TestCoverageDeltaAcceptance_AT_40(t *testing.T) { coverageDeltaScenario(t) }
+
+func coverageDeltaScenario(t *testing.T) {
+	t.Helper()
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1", "AT-2", "IT-2", "UT-2"))
+	writeFile(t, filepath.Join(repo, "cov-src.txt"), "TN:\nSF:a.ts\nDA:1,1\nDA:2,0\nend_of_record\n") // 50%
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml && cp cov-src.txt reports/cov.data"
+	p.CoverageGlob = "reports/cov.data"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	drive := func(tr tree) string {
+		t.Helper()
+		for _, verb := range []string{"refine", "start"} {
+			if _, err := e.Transition(tr.story, verb); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wt := wtPath(repo, tr.story)
+		writeFile(t, filepath.Join(wt, tr.story+".txt"), "x")
+		git(t, wt, "add", ".")
+		git(t, wt, "commit", "-m", "impl")
+		msg, err := e.Transition(tr.story, "finish")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msg
+	}
+
+	// First snapshot: no delta, no misleading zero.
+	msg := drive(fullTree(t, e))
+	if !strings.Contains(msg, "coverage 50.0%") || strings.Contains(msg, "(+") || strings.Contains(msg, "(-") {
+		t.Fatalf("first snapshot must carry no delta: %s", msg)
+	}
+	o, _ := e.Overview()
+	if o.Coverage == nil || o.Coverage.DeltaPct != nil {
+		t.Fatalf("overview delta on first snapshot: %+v", o.Coverage)
+	}
+
+	// Second snapshot at 75%: signed positive delta.
+	writeFile(t, filepath.Join(repo, "cov-src.txt"), "TN:\nSF:a.ts\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,0\nend_of_record\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "more coverage")
+	msg = drive(fullTree(t, e))
+	if !strings.Contains(msg, "coverage 75.0% (+25.0)") {
+		t.Fatalf("second snapshot delta: %s", msg)
+	}
+	o, _ = e.Overview()
+	if o.Coverage == nil || o.Coverage.DeltaPct == nil || *o.Coverage.DeltaPct != 25 {
+		t.Fatalf("overview delta: %+v", o.Coverage)
+	}
+}
