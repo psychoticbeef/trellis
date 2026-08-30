@@ -770,3 +770,79 @@ func TestKanbanAcceptance_AT_32(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditAcceptance_AT_37 proves AT-37 (US-33 "Bidirectional audit")
+// through CLI and MCP: findings, exit codes, and the identical MCP report.
+func TestAuditAcceptance_AT_37(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(s.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(s.ID, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+
+	// Clean: exit 0.
+	if err := run([]string{"audit", "p1"}); err != nil {
+		t.Fatalf("clean audit must exit 0: %v", err)
+	}
+
+	// Rot: broken done evidence -> exit 1 with violations.
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"),
+		[]byte(`<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/></testsuite>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "rot")
+	err = run([]string{"audit", "p1"})
+	if err == nil || !strings.Contains(err.Error(), "violation") {
+		t.Fatalf("rotten audit must exit nonzero: %v", err)
+	}
+	// The engine report (same data the MCP tool serves) carries the finding.
+	rep, err := e.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Violations) == 0 || !strings.Contains(strings.Join(rep.Violations, "\n"), "UT-1") {
+		t.Fatalf("report missing violation: %+v", rep)
+	}
+}

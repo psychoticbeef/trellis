@@ -1271,3 +1271,85 @@ func TestCoverageIntegration_IT_32(t *testing.T) {
 		t.Fatalf("finish must succeed despite broken coverage, story = %s", got)
 	}
 }
+
+// TestAuditIntegration_IT_33 proves IT-33 (US-33 "Bidirectional audit"):
+// the full rot matrix — clean repo, broken done evidence, missing declared
+// path, dangling spec reference, unbound test and unclaimed file as infos.
+func TestAuditIntegration_IT_33(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	writeFile(t, filepath.Join(repo, "pkg/impl.go"), "package pkg")
+	writeFile(t, filepath.Join(repo, "stray/orphan.go"), "package stray")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if _, err := e.SetPaths(tr.story, []string{"pkg"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"refine", "start"} {
+		if _, err := e.Transition(tr.story, verb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt := wtPath(repo, tr.story)
+	writeFile(t, filepath.Join(wt, "impl.txt"), "x")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "impl")
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clean state: no violations; orphan file listed informationally.
+	rep, err := e.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Violations) != 0 {
+		t.Fatalf("clean repo has violations: %v", rep.Violations)
+	}
+	joined := strings.Join(rep.Infos, "\n")
+	if !strings.Contains(joined, "stray/orphan.go") || strings.Contains(joined, "pkg/impl.go") {
+		t.Fatalf("unclaimed info wrong: %s", joined)
+	}
+
+	// Seed rot: rename the UT-1 test away (done evidence breaks), add a test
+	// referencing a nonexistent spec, an unbound test, and drop the declared
+	// path.
+	writeFile(t, filepath.Join(repo, "report-src.xml"),
+		`<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_77"/><testcase name="TestFreeFloating"/></testsuite>`)
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "rot")
+	if err := os.RemoveAll(filepath.Join(repo, "pkg")); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err = e.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinedV := strings.Join(rep.Violations, "\n")
+	for _, want := range []string{
+		"done story " + tr.story + ": UT-1: no test references",
+		"references nonexistent spec UT-77",
+		"declared path pkg no longer exists",
+	} {
+		if !strings.Contains(joinedV, want) {
+			t.Errorf("violations missing %q:\n%s", want, joinedV)
+		}
+	}
+	if !strings.Contains(strings.Join(rep.Infos, "\n"), "unbound") {
+		t.Errorf("unbound info missing: %v", rep.Infos)
+	}
+}

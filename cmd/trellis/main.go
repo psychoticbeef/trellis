@@ -42,6 +42,7 @@ Usage:
   trellis board <project-id> [-o <file>] [--serve [--addr]]    write or serve the HTML spec board
   trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
   trellis release <project-id>                                 merge base into release with feature manifest + backup
+  trellis audit <project-id>                                   validate spec and reality in both directions
   trellis export <project-id> [-o <file>]                      write the spec database as YAML
   trellis import -f <file> --name <name> --repo <path>         restore an export into a new project
 
@@ -84,6 +85,8 @@ func run(args []string) error {
 		return cmdGate(rest)
 	case "release":
 		return cmdRelease(rest)
+	case "audit":
+		return cmdAudit(rest)
 	case "export":
 		return cmdExport(rest)
 	case "import":
@@ -401,6 +404,32 @@ func cmdRelease(args []string) error {
 	}
 	fmt.Println(msg)
 	return nil
+}
+
+func cmdAudit(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: trellis audit <project-id>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	rep, err := e.Audit()
+	if err != nil {
+		return err
+	}
+	for _, v := range rep.Violations {
+		fmt.Println("VIOLATION:", v)
+	}
+	for _, i := range rep.Infos {
+		fmt.Println("info:", i)
+	}
+	if len(rep.Violations) == 0 {
+		fmt.Println("audit clean: spec and reality agree in both directions")
+		return nil
+	}
+	return fmt.Errorf("%d violation(s)", len(rep.Violations))
 }
 
 func cmdExport(args []string) error {
