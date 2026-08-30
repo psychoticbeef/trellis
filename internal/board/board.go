@@ -1,0 +1,238 @@
+// Package board renders the whole spec database as one self-contained HTML
+// page. It feeds exclusively on the engine's reports — the same data the MCP
+// tools serve — so there is no second data path to drift.
+package board
+
+import (
+	"fmt"
+	"html/template"
+	"strings"
+	"time"
+
+	"trellis/internal/core"
+	"trellis/internal/model"
+)
+
+type nodeView struct {
+	ID       string
+	Kind     string
+	KindName string
+	Title    string
+	Body     string
+	Fresh    bool
+	Problems []string
+	Covers   []string
+	Paths    []string
+	Deps     []core.DepInfo
+	Evidence *core.EvidenceInfo
+	Children []nodeView
+	Depth    int
+	IsTest   bool
+}
+
+type storyView struct {
+	ID       string
+	Title    string
+	Body     string
+	Status   string
+	StatusCl string
+	Fresh    bool
+	ACs      []core.ACInfo
+	Children []nodeView
+	Blocked  []string
+	Paths    []string
+}
+
+type ccView struct {
+	ID       string
+	Title    string
+	Body     string
+	Accepted bool
+}
+
+type page struct {
+	Project string
+	Stamp   string
+	Stories []storyView
+	CCs     []ccView
+}
+
+var kindNames = map[string]string{
+	"story": "Story", "acceptance_test": "Acceptance test", "arch": "Architecture",
+	"integration_test": "Integration test", "detail_design": "Detail design",
+	"unit_test": "Unit test", "cross_cutting": "Cross-cutting",
+}
+
+// Render produces the full board HTML for one project.
+func Render(e *core.Engine) (string, error) {
+	overview, err := e.Overview()
+	if err != nil {
+		return "", err
+	}
+	p := page{Project: e.Project.ID, Stamp: time.Now().Format("2006-01-02 15:04")}
+	for _, cc := range overview.CrossCutting {
+		n, err := e.Node(cc.ID)
+		if err != nil {
+			return "", err
+		}
+		p.CCs = append(p.CCs, ccView{ID: cc.ID, Title: cc.Title, Body: n.Body, Accepted: cc.Accepted})
+	}
+	for _, s := range overview.Stories {
+		tree, err := e.Tree(s.ID)
+		if err != nil {
+			return "", err
+		}
+		story, err := e.Node(s.ID)
+		if err != nil {
+			return "", err
+		}
+		sv := storyView{
+			ID: s.ID, Title: s.Title, Body: story.Body, Status: s.Status,
+			StatusCl: strings.ReplaceAll(s.Status, "_", ""), Fresh: tree.Story.Fresh,
+			ACs: tree.ACs, Blocked: tree.Integrity, Paths: story.Paths,
+		}
+		for _, c := range tree.Story.Children {
+			cv, err := viewNode(e, c, 1)
+			if err != nil {
+				return "", err
+			}
+			sv.Children = append(sv.Children, cv)
+		}
+		p.Stories = append(p.Stories, sv)
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, p); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func viewNode(e *core.Engine, tn core.TreeNode, depth int) (nodeView, error) {
+	full, err := e.Node(tn.ID)
+	if err != nil {
+		return nodeView{}, err
+	}
+	nv := nodeView{
+		ID: tn.ID, Kind: tn.Kind, KindName: kindNames[tn.Kind], Title: tn.Title,
+		Body: full.Body, Fresh: tn.Fresh, Problems: tn.Problems, Covers: tn.Covers,
+		Paths: tn.Paths, Deps: tn.Deps, Evidence: tn.Evidence, Depth: depth,
+		IsTest: model.TestSpecKinds[model.Kind(tn.Kind)],
+	}
+	for _, c := range tn.Children {
+		cv, err := viewNode(e, c, depth+1)
+		if err != nil {
+			return nodeView{}, err
+		}
+		nv.Children = append(nv.Children, cv)
+	}
+	return nv, nil
+}
+
+var tmpl = template.Must(template.New("board").Funcs(template.FuncMap{
+	"join": func(v []string) string { return strings.Join(v, ", ") },
+	"depthClass": func(d int) string {
+		if d > 3 {
+			d = 3
+		}
+		return fmt.Sprintf("d%d", d)
+	},
+}).Parse(boardHTML))
+
+const boardHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trellis board — {{.Project}}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #F7F8F6; --surface: #FFFFFF; --ink: #1C221D; --muted: #5B6560;
+  --line: #DDE2DC; --accent: #2F6B3F; --accent-soft: #E7EFE8;
+  --todo: #5B6560; --refined: #3D5A99; --inprogress: #A66A1E; --done: #2F6B3F; --stale: #A8352E;
+  --stale-bg: #F6E4E2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #141815; --surface: #1C221E; --ink: #E4EAE4; --muted: #97A29A;
+    --line: #313A33; --accent: #7FB88A; --accent-soft: #243227;
+    --todo: #97A29A; --refined: #93ACDD; --inprogress: #D9A867; --done: #7FB88A; --stale: #DD8B84;
+    --stale-bg: #362321;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #141815; --surface: #1C221E; --ink: #E4EAE4; --muted: #97A29A;
+  --line: #313A33; --accent: #7FB88A; --accent-soft: #243227;
+  --todo: #97A29A; --refined: #93ACDD; --inprogress: #D9A867; --done: #7FB88A; --stale: #DD8B84;
+  --stale-bg: #362321;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); margin: 0; font: 16px/1.55 "Source Sans 3", system-ui, sans-serif; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.86em; }
+h1 { font-family: Bitter, Georgia, serif; font-size: 1.9rem; margin: 0; }
+h1 span { color: var(--accent); }
+.sub { color: var(--muted); margin: 4px 0 28px; font-size: 0.9rem; }
+h2 { font-family: Bitter, Georgia, serif; font-size: 1.25rem; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 22px 24px; margin: 0 0 22px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
+.chip { display: inline-flex; gap: 7px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); text-decoration: none; font-size: 0.85rem; }
+.state { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.st-todo { color: var(--todo); } .st-refined { color: var(--refined); }
+.st-inprogress { color: var(--inprogress); } .st-done { color: var(--done); }
+.storybody { color: var(--muted); max-width: 65ch; margin: 0 0 16px; }
+table { border-collapse: collapse; width: 100%; margin: 0 0 18px; font-size: 0.92rem; }
+th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 0 12px 6px 0; border-bottom: 1px solid var(--line); }
+td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.gwt { display: inline-block; min-width: 46px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--accent); }
+.cov { color: var(--accent); white-space: nowrap; }
+.node { border-left: 2px solid var(--line); padding: 2px 0 2px 14px; margin: 6px 0; }
+.node.d2 { margin-left: 26px; } .node.d3 { margin-left: 52px; }
+.node summary { cursor: pointer; list-style: none; }
+.node summary::-webkit-details-marker { display: none; }
+.nid { color: var(--accent); font-weight: 500; margin-right: 8px; }
+.kind { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); background: var(--accent-soft); border-radius: 3px; padding: 2px 6px; margin-right: 8px; }
+.mark { font-size: 0.72rem; font-weight: 600; margin-left: 6px; }
+.ok { color: var(--done); } .stale { color: var(--stale); }
+.meta { color: var(--muted); font-size: 0.85rem; }
+.body { color: var(--muted); font-size: 0.92rem; max-width: 68ch; margin: 8px 0 4px; white-space: pre-line; }
+.problem { color: var(--stale); background: var(--stale-bg); border-radius: 4px; padding: 6px 10px; margin: 6px 0; font-size: 0.88rem; }
+.evidence { color: var(--muted); font-size: 0.85rem; margin: 4px 0; }
+.evidence .mono { color: var(--done); }
+.gates { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+a { color: var(--accent); }
+</style></head><body>
+<div class="wrap">
+<h1><span>trellis</span> board</h1>
+<p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
+<nav class="chips">
+{{range .Stories}}<a class="chip" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span></a>
+{{end}}</nav>
+
+<section><h2>Cross-cutting architecture</h2>
+{{range .CCs}}<details class="node d1" id="{{.ID}}" open><summary><span class="mono nid">{{.ID}}</span><span class="kind">Cross-cutting</span> {{.Title}} {{if .Accepted}}<span class="mark ok">accepted</span>{{else}}<span class="mark stale">draft / stale</span>{{end}}</summary><div class="body">{{.Body}}</div></details>
+{{end}}</section>
+
+{{range .Stories}}
+<section id="{{.ID}}">
+<h2><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}</h2>
+<p class="storybody">{{.Body}}</p>
+{{if .Paths}}<p class="meta">code: <span class="mono">{{join .Paths}}</span></p>{{end}}
+{{if .ACs}}<table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
+{{range .ACs}}<tr><td class="mono">{{.ID}}</td><td><span class="gwt">Given</span> {{.Given}}<br><span class="gwt">When</span> {{.When}}<br><span class="gwt">Then</span> {{.Then}}</td><td class="mono cov">{{join .CoveredBy}}</td></tr>
+{{end}}</tbody></table>{{end}}
+{{range .Children}}{{template "node" .}}{{end}}
+{{if .Blocked}}<p class="gates stale">blocked</p>{{range .Blocked}}<div class="problem">{{.}}</div>{{end}}{{else}}<p class="gates ok">gates open</p>{{end}}
+</section>
+{{end}}
+</div></body></html>
+
+{{define "node"}}<details class="node {{depthClass .Depth}}" id="{{.ID}}"{{if lt .Depth 2}} open{{end}}>
+<summary><span class="mono nid">{{.ID}}</span><span class="kind">{{.KindName}}</span> {{.Title}}
+{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}
+<span class="meta">{{if .Covers}} · covers <span class="mono">{{join .Covers}}</span>{{end}}{{range .Deps}} · needs <a class="mono {{if .Fresh}}ok{{else}}stale{{end}}" href="#{{.Target}}">{{.Target}}</a>{{end}}</span></summary>
+{{if .Body}}<div class="body">{{.Body}}</div>{{end}}
+{{if .Evidence}}<div class="evidence">proved by <span class="mono">{{join .Evidence.Tests}}</span> · {{.Evidence.RecordedAt}}</div>{{else if .IsTest}}<div class="evidence stale">no test evidence recorded yet</div>{{end}}
+{{range .Problems}}<div class="problem">{{.}}</div>{{end}}
+</details>
+{{range .Children}}{{template "node" .}}{{end}}{{end}}
+`
