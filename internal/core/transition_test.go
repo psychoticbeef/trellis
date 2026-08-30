@@ -142,3 +142,80 @@ func TestStartRequiresCleanWorktreeAndBase(t *testing.T) {
 	_, err = e.Transition(tr.story, "start")
 	wantErr(t, err, "worktree not clean")
 }
+
+// TestTransitionGuardMatrix_IT_5 proves IT-5 (US-5): every illegal
+// (state, verb) pair is rejected naming the required status, and the
+// downgrade-repair-refine loop works mid-implementation.
+func TestTransitionGuardMatrix_IT_5(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath = repo
+	p.LintCmd = "true"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	p.JUnitGlob = "reports/*.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := fullTree(t, e)
+	blocked := func(verb, wantStatus string) {
+		t.Helper()
+		_, err := e.Transition(tr.story, verb)
+		wantErr(t, err, verb+" blocked", fmt.Sprintf("%s requires %q", verb, wantStatus))
+	}
+
+	// todo: only refine is legal.
+	blocked("start", "refined")
+	blocked("finish", "in_progress")
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+
+	// refined: only start is legal.
+	blocked("refine", "todo")
+	blocked("finish", "in_progress")
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+
+	// in_progress: only finish is legal.
+	blocked("refine", "todo")
+	blocked("start", "refined")
+
+	// Downgrade-repair loop: an edit mid-implementation forces the full loop.
+	body := "changed mid-flight"
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("status = %s, want todo after mid-implementation edit", got)
+	}
+	blocked("finish", "in_progress")
+	approve(t, e, tr.dd)
+	approve(t, e, tr.ut)
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatalf("re-start on existing branch: %v", err)
+	}
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	// done: nothing is legal anymore.
+	blocked("refine", "todo")
+	blocked("start", "refined")
+	blocked("finish", "in_progress")
+	_, err := e.Transition(tr.story, "warp")
+	wantErr(t, err, `unknown action "warp"`)
+}

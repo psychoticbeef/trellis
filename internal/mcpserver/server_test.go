@@ -314,3 +314,56 @@ func TestCrossCuttingFlowAcceptance_AT_4(t *testing.T) {
 	call(t, cs, "unlink_dependency", map[string]any{"node_id": arch, "target_id": cc})
 	call(t, cs, "delete_node", map[string]any{"id": cc})
 }
+
+// TestGateAcceptance_AT_5 proves AT-5 (US-5 "Story state machine with
+// gates"): refine on an empty story lists every problem, the tree is
+// completed stepwise, and the tool surface has no status-setting tool.
+func TestGateAcceptance_AT_5(t *testing.T) {
+	cs := client(t)
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "s"})["id"].(string)
+
+	// Empty story: exhaustive problem list in one response.
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"},
+		"refine blocked", "no acceptance criteria", "no acceptance test specs", "no arch spec", story+" never approved")
+
+	// Stepwise completion: each repair shrinks the list until refine passes.
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g", "when": "w", "then": "t"})
+	at := call(t, cs, "create_node", map[string]any{"kind": "acceptance_test", "parent_id": story, "title": "at", "covers": []string{story + ".AC-1"}})["id"].(string)
+	arch := call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": story, "title": "as"})["id"].(string)
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"},
+		arch+" has no integration test specs", arch+" has no detail designs")
+	it := call(t, cs, "create_node", map[string]any{"kind": "integration_test", "parent_id": arch, "title": "it"})["id"].(string)
+	dd := call(t, cs, "create_node", map[string]any{"kind": "detail_design", "parent_id": arch, "title": "dd"})["id"].(string)
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"},
+		dd+" has no unit test specs")
+	ut := call(t, cs, "create_node", map[string]any{"kind": "unit_test", "parent_id": dd, "title": "ut"})["id"].(string)
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"},
+		"never approved")
+	for _, id := range []string{story, at, arch, it, dd, ut} {
+		approveMCP(t, cs, id)
+	}
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	if st, _ := nodeStatus(t, cs, story); st != "refined" {
+		t.Fatalf("status = %s, want refined", st)
+	}
+
+	// No status-setting tool exists; transition is the only mover.
+	tools, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools.Tools {
+		seen[tool.Name] = true
+		if strings.Contains(tool.Name, "status") || strings.HasPrefix(tool.Name, "set_") {
+			t.Errorf("tool surface must not offer status setting, found %q", tool.Name)
+		}
+	}
+	if !seen["transition"] {
+		t.Error("transition tool missing from tool surface")
+	}
+
+	// Unknown verbs are rejected.
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "teleport"},
+		"unknown action", "refine, start, finish")
+}
