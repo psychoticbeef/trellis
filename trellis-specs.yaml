@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 25
-    AT: 29
+    AS: 26
+    AT: 30
     CC: 4
-    DD: 26
-    IT: 25
-    US: 25
-    UT: 26
+    DD: 27
+    IT: 26
+    US: 26
+    UT: 27
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -67,6 +67,7 @@ counters:
     ac:US-23: 4
     ac:US-24: 3
     ac:US-25: 4
+    ac:US-26: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -1751,3 +1752,79 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestExportImportCLIAcceptance_AT_29
             recorded_at: "2026-08-30T13:16:10Z"
+    - id: US-26
+      kind: story
+      title: Batch tree approval
+      body: As a development agent I want to read and approve a whole story tree in two calls instead of two per node, so approval stays a deliberate act without becoming a chatty ritual that trains sloppiness.
+      status: done
+      acceptance_criteria:
+        - id: US-26.AC-1
+          given: a story tree
+          when: the agent calls get_tree with full=true
+          then: every node carries its body — the complete tree content arrives in one call
+        - id: US-26.AC-2
+          given: the current hashes of every tree node and of every pinned dependency target
+          when: the agent calls approve_tree
+          then: 'the whole tree is approved top-down in one call and dependency pins are refreshed — the read-proof granularity moves from node to tree, no weaker: whoever has the hashes had the full content'
+        - id: US-26.AC-3
+          given: a missing, unknown or outdated hash anywhere in the batch
+          when: approve_tree runs
+          then: the entire batch is rejected listing every problem and nothing is approved — all or nothing
+        - id: US-26.AC-4
+          given: sequencing links on the story
+          when: approve_tree runs
+          then: they need no hashes, consistent with single-node approval
+      approved_content_hash: 6e5fee1df7a5e4460980e16fa5bad55a007c125130d4574037853e547fde3e62
+      children:
+        - id: AS-26
+          kind: arch
+          title: Validate everything, then apply atomically
+          body: approve_tree validates the complete batch first — every tree node needs its current content hash, every pinned dependency target its current hash (sequencing links exempt), unknown ids are errors — and only a problem-free batch is applied, top-down, with pins refreshed. The read-proof contract stays hash-per-content; get_tree full=true makes the content available at the same granularity.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: b0c4f52457066adfbadbe068ac2f4edb5507aa923d911dc69bde5ce1d4349e13
+          approved_parent_hash: 6e5fee1df7a5e4460980e16fa5bad55a007c125130d4574037853e547fde3e62
+          children:
+            - id: DD-27
+              kind: detail_design
+              title: ApproveTree and full tree reads
+              body: 'core: ApproveTree(storyID, hashes, depHashes) walks treeNodes top-down collecting problems (missing/unknown/mismatched node hashes, missing/stale dep hashes), applies SetApproval+PinDep only when clean, one event for the batch. TreeNode gains Body, filled when Tree(storyID, full). MCP: get_tree full flag, approve_tree tool.'
+              approved_content_hash: 323cb6dbf2ae8f83d537242bc836d4d8f64bc0520ec574bc0a4414c0bf1a2aa9
+              approved_parent_hash: b0c4f52457066adfbadbe068ac2f4edb5507aa923d911dc69bde5ce1d4349e13
+              children:
+                - id: UT-27
+                  kind: unit_test
+                  title: Batch validation unit tests
+                  body: 'Unit-test the validation matrix: missing node hash, unknown id, stale hash, missing and stale dep hash, sequencing exemption — each its own problem line; and that a failing batch changes no approval state.'
+                  approved_content_hash: 10a6ff69901a322fa1c44df52bd94a8e20f5a05fdf7d9dd4120be1dc555008e2
+                  approved_parent_hash: 323cb6dbf2ae8f83d537242bc836d4d8f64bc0520ec574bc0a4414c0bf1a2aa9
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestBatchValidation_UT_27
+                    recorded_at: "2026-08-30T13:25:31Z"
+            - id: IT-26
+              kind: integration_test
+              title: Batch approval integration
+              body: 'Engine + store: happy batch over a tree with cross-cutting pins and a sequencing link; failed batch leaves zero new approvals (atomicity verified against a fully stale tree); refine passes after the batch.'
+              approved_content_hash: e1694915b2bcd2d92b3df1929e3693f36e68821b7ccccdb4ae65cb2ac4898572
+              approved_parent_hash: b0c4f52457066adfbadbe068ac2f4edb5507aa923d911dc69bde5ce1d4349e13
+              evidence:
+                tests:
+                    - trellis/internal/core::TestBatchApprovalIntegration_IT_26
+                recorded_at: "2026-08-30T13:25:31Z"
+        - id: AT-30
+          kind: acceptance_test
+          title: Batch approval acceptance
+          body: 'Through MCP: fetch get_tree full=true asserting bodies; approve_tree the whole tree from those hashes and refine; edit a mid-tree node and assert a batch with the old hash is rejected listing the mismatch while nothing got approved; assert missing and unknown ids are named; assert a story with a sequencing link approves without a hash for it.'
+          covers:
+            - US-26.AC-1
+            - US-26.AC-2
+            - US-26.AC-3
+            - US-26.AC-4
+          approved_content_hash: 86142734109b0efccc4021e52e703280d83e5c6da442833262e82c6618d08fb6
+          approved_parent_hash: 6e5fee1df7a5e4460980e16fa5bad55a007c125130d4574037853e547fde3e62
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestBatchApprovalAcceptance_AT_30
+            recorded_at: "2026-08-30T13:25:31Z"
