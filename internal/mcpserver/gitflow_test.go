@@ -304,3 +304,43 @@ func TestAbortAcceptance_AT_12(t *testing.T) {
 		t.Fatal("discarded work survived into the fresh branch")
 	}
 }
+
+// TestSequencingAcceptance_AT_13 proves AT-13 (US-11 "Story sequencing
+// dependencies") through MCP: linking to an unrefined story, start blocked
+// naming the dependency, unblocked once it is done, cycle rejected.
+func TestSequencingAcceptance_AT_13(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+
+	a, atA, _, itA, _, utA := fullTreeMCP(t, cs) // prerequisite, still todo
+	b, _, _, _, _, _ := fullTreeMCP(t, cs)
+
+	// Sequencing link onto a todo story works.
+	call(t, cs, "link_dependency", map[string]any{"node_id": b, "target_id": a})
+	call(t, cs, "transition", map[string]any{"story_id": b, "action": "refine"})
+	callErr(t, cs, "transition", map[string]any{"story_id": b, "action": "start"},
+		"start blocked: unfinished dependencies", a+" (todo)")
+
+	// Cycle rejected.
+	callErr(t, cs, "link_dependency", map[string]any{"node_id": a, "target_id": b},
+		"sequencing cycle")
+
+	// Drive the prerequisite to done, then start proceeds.
+	call(t, cs, "transition", map[string]any{"story_id": a, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": a, "action": "start"})
+	setReport(t, repo, map[string]string{atA: "", itA: "", utA: ""})
+	call(t, cs, "transition", map[string]any{"story_id": a, "action": "finish"})
+	call(t, cs, "transition", map[string]any{"story_id": b, "action": "start"})
+	if st, _ := nodeStatus(t, cs, b); st != "in_progress" {
+		t.Fatalf("status = %s, want in_progress", st)
+	}
+}

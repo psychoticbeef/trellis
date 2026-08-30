@@ -414,3 +414,53 @@ func TestAbortIntegration_IT_10(t *testing.T) {
 		t.Fatal("doomed work survived the abort")
 	}
 }
+
+// TestSequencingIntegration_IT_11 proves IT-11 (US-11): link creation in any
+// target state, start blocked per dependency, unblocked after the dependency
+// finishes, cycle rejection across a chain.
+func TestSequencingIntegration_IT_11(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := fullTree(t, e) // will be the prerequisite
+	b := fullTree(t, e)
+	c := fullTree(t, e)
+	if err := e.LinkDep(b.story, a.story); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.LinkDep(c.story, b.story); err != nil {
+		t.Fatal(err)
+	}
+	err := e.LinkDep(a.story, c.story) // would close a -> c -> b -> a? (a depends on c, c on b, b on a)
+	wantErr(t, err, "sequencing cycle")
+
+	if _, err := e.Transition(b.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Transition(b.story, "start")
+	wantErr(t, err, "unfinished dependencies", a.story+" (todo)")
+
+	// Drive the prerequisite through the full flow.
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(a.story, verb); err != nil {
+			t.Fatalf("%s(%s): %v", verb, a.story, err)
+		}
+	}
+	if _, err := e.Transition(b.story, "start"); err != nil {
+		t.Fatalf("start after dependency done: %v", err)
+	}
+}

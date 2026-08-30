@@ -370,12 +370,28 @@ func (e *Engine) LinkDep(nodeID, targetID string) error {
 	if nodeID == targetID {
 		return fmt.Errorf("a node cannot depend on itself")
 	}
-	if _, err := e.st.GetNode(e.pid(), nodeID); err != nil {
+	node, err := e.st.GetNode(e.pid(), nodeID)
+	if err != nil {
 		return err
 	}
 	target, err := e.st.GetNode(e.pid(), targetID)
 	if err != nil {
 		return err
+	}
+	// Story-to-story links are sequencing edges: no hash pin, no freshness
+	// coupling — only start gates on them. They may target any story state,
+	// but must not form a cycle.
+	if node.Kind == model.KindStory && target.Kind == model.KindStory {
+		if cycle, err := e.sequencingCycle(nodeID, targetID); err != nil {
+			return err
+		} else if cycle != "" {
+			return fmt.Errorf("link blocked: sequencing cycle %s", cycle)
+		}
+		if err := e.st.LinkDep(e.pid(), model.Dep{NodeID: nodeID, TargetID: targetID, PinnedHash: ""}); err != nil {
+			return err
+		}
+		e.st.AppendEvent(e.pid(), "link", nodeID, "sequencing depends_on "+targetID)
+		return nil
 	}
 	fresh, reasons, err := e.freshness(target)
 	if err != nil {
@@ -393,6 +409,43 @@ func (e *Engine) LinkDep(nodeID, targetID string) error {
 	}
 	e.st.AppendEvent(e.pid(), "link", nodeID, "depends_on "+targetID)
 	return nil
+}
+
+// sequencingCycle reports the story chain that linking from -> to would close
+// into a cycle, or "" when the link is safe.
+func (e *Engine) sequencingCycle(from, to string) (string, error) {
+	path := []string{from, to}
+	var walk func(cur string) (string, error)
+	seen := map[string]bool{}
+	walk = func(cur string) (string, error) {
+		if cur == from {
+			return strings.Join(path, " -> "), nil
+		}
+		if seen[cur] {
+			return "", nil
+		}
+		seen[cur] = true
+		deps, err := e.st.ListDeps(e.pid(), cur)
+		if err != nil {
+			return "", err
+		}
+		for _, d := range deps {
+			target, err := e.st.GetNode(e.pid(), d.TargetID)
+			if err != nil {
+				return "", err
+			}
+			if target.Kind != model.KindStory {
+				continue
+			}
+			path = append(path, d.TargetID)
+			if cycle, err := walk(d.TargetID); err != nil || cycle != "" {
+				return cycle, err
+			}
+			path = path[:len(path)-1]
+		}
+		return "", nil
+	}
+	return walk(to)
 }
 
 func (e *Engine) UnlinkDep(nodeID, targetID string) error {
@@ -440,7 +493,12 @@ func (e *Engine) Approve(nodeID, contentHash string, depHashes map[string]string
 	}
 	var problems []string
 	pins := map[string]string{}
+	sequencing := map[string]bool{}
 	for _, d := range deps {
+		if d.PinnedHash == "" {
+			sequencing[d.TargetID] = true
+			continue // sequencing edge: no proof-of-reading required
+		}
 		target, err := e.st.GetNode(e.pid(), d.TargetID)
 		if err != nil {
 			return err
@@ -460,6 +518,9 @@ func (e *Engine) Approve(nodeID, contentHash string, depHashes map[string]string
 		}
 	}
 	for tid := range depHashes {
+		if sequencing[tid] {
+			continue // provided but not needed; harmless
+		}
 		found := false
 		for _, d := range deps {
 			if d.TargetID == tid {

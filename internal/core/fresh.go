@@ -41,6 +41,9 @@ func (e *Engine) freshness(n model.Node) (bool, []string, error) {
 		return false, nil, err
 	}
 	for _, d := range deps {
+		if d.PinnedHash == "" {
+			continue // sequencing edge: no freshness coupling
+		}
 		target, err := e.st.GetNode(e.pid(), d.TargetID)
 		if err != nil {
 			return false, nil, err
@@ -152,8 +155,9 @@ func (e *Engine) integrity(storyID string) ([]string, error) {
 // ---- reports ----
 
 type DepInfo struct {
-	Target string `json:"target"`
-	Fresh  bool   `json:"fresh"`
+	Target     string `json:"target"`
+	Fresh      bool   `json:"fresh"`
+	Sequencing bool   `json:"sequencing,omitempty"`
 }
 
 type TreeNode struct {
@@ -244,6 +248,10 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 		return TreeNode{}, err
 	}
 	for _, d := range deps {
+		if d.PinnedHash == "" {
+			tn.Deps = append(tn.Deps, DepInfo{Target: d.TargetID, Fresh: true, Sequencing: true})
+			continue
+		}
 		target, err := e.st.GetNode(e.pid(), d.TargetID)
 		if err != nil {
 			return TreeNode{}, err
@@ -288,6 +296,7 @@ type NodeDep struct {
 	TargetHash  string `json:"target_content_hash"`
 	TargetTitle string `json:"target_title"`
 	Fresh       bool   `json:"fresh"`
+	Sequencing  bool   `json:"sequencing,omitempty"`
 }
 
 // Node returns the full content of one node, including the hashes needed to
@@ -321,6 +330,10 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 		targetHash, err := e.hashOf(target)
 		if err != nil {
 			return NodeReport{}, err
+		}
+		if d.PinnedHash == "" {
+			r.Deps = append(r.Deps, NodeDep{Target: d.TargetID, TargetHash: targetHash, TargetTitle: target.Title, Fresh: true, Sequencing: true})
+			continue
 		}
 		r.Deps = append(r.Deps, NodeDep{Target: d.TargetID, TargetHash: targetHash, TargetTitle: target.Title, Fresh: d.PinnedHash == targetHash})
 	}
