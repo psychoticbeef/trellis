@@ -424,3 +424,63 @@ func TestSearchAcceptance_AT_14(t *testing.T) {
 		}
 	}
 }
+
+// TestFTSSearchAcceptance_AT_23 proves AT-23 (US-19 "FTS5 search") through
+// MCP: multi-term AND with BM25 order, prefix on the last term, immediate
+// index updates, hostile queries staying safe.
+func TestFTSSearchAcceptance_AT_23(t *testing.T) {
+	cs := client(t)
+	search := func(q string) []map[string]any {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+			Arguments: map[string]any{"query": q}})
+		if err != nil || res.IsError {
+			t.Fatalf("search %q: %v %s", q, err, text(res))
+		}
+		var hits []map[string]any
+		if err := json.Unmarshal([]byte(text(res)), &hits); err != nil {
+			t.Fatalf("bad output %q: %v", text(res), err)
+		}
+		return hits
+	}
+
+	strong := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "quorum snapshot",
+		"body": "quorum snapshot quorum snapshot everywhere"})["id"].(string)
+	weak := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "other",
+		"body": "one quorum snapshot mention buried in lots of entirely unrelated prose text"})["id"].(string)
+
+	// AND semantics + BM25 order.
+	hits := search("quorum snapshot")
+	if len(hits) != 2 || hits[0]["id"] != strong || hits[1]["id"] != weak {
+		t.Fatalf("ranked AND search: %v", hits)
+	}
+	if len(search("quorum nothingelse")) != 0 {
+		t.Fatal("AND semantics violated")
+	}
+
+	// Prefix on the last term.
+	if len(search("quorum snap")) != 2 {
+		t.Fatal("prefix match failed")
+	}
+
+	// Immediate index updates across create/update/delete and AC ops.
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": strong, "given": "a krakenlike load", "when": "w", "then": "t"})
+	if len(search("krakenlike")) != 1 {
+		t.Fatal("AC not searchable immediately")
+	}
+	call(t, cs, "update_node", map[string]any{"id": weak, "body": "rewritten entirely"})
+	if len(search("buried")) != 0 {
+		t.Fatal("stale text after update")
+	}
+	call(t, cs, "delete_acceptance_criterion", map[string]any{"ac_id": strong + ".AC-1"})
+	if len(search("krakenlike")) != 0 {
+		t.Fatal("deleted AC still searchable")
+	}
+
+	// Hostile queries are literal and safe.
+	for _, q := range []string{`"quorum" OR`, "NEAR(a b)", "col:val", "(((", `""`} {
+		if hits := search(q); len(hits) > 2 {
+			t.Fatalf("hostile query %q misbehaved: %v", q, hits)
+		}
+	}
+}

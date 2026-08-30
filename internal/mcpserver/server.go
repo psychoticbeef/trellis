@@ -80,7 +80,7 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Remove a dependency link."},
 		s.unlinkDep)
 	mcp.AddTool(srv, &mcp.Tool{Name: "search_specs",
-		Description: "Full-text search over spec titles, bodies and acceptance criteria (case-insensitive). Returns id, kind, owning story, title and a matching snippet per hit. Use this to find relevant context before designing or implementing."},
+		Description: "Full-text search over spec titles, bodies and acceptance criteria: every term must match (last term as word prefix), results ranked by relevance, snippet per hit. Use this to find relevant context before designing or implementing."},
 		s.searchSpecs)
 	mcp.AddTool(srv, &mcp.Tool{Name: "set_paths",
 		Description: "Declare which repo-relative files/folders realize a story (metadata, does not invalidate approvals; empty list clears). finish verifies the paths exist."},

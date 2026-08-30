@@ -105,7 +105,22 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate paths: %w", err)
 	}
-	return &Store{db: db}, nil
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS specs_fts USING fts5(project_id UNINDEXED, node_id UNINDEXED, body)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate fts: %w", err)
+	}
+	st := &Store{db: db}
+	// Rebuild the index for stores that predate FTS.
+	var ftsRows, nodeRows int
+	db.QueryRow(`SELECT count(*) FROM specs_fts`).Scan(&ftsRows)
+	db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodeRows)
+	if ftsRows == 0 && nodeRows > 0 {
+		if err := st.reindexAll(); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("rebuild fts: %w", err)
+		}
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -225,7 +240,10 @@ func (s *Store) InsertNode(n model.Node) error {
 	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), stringsJSON(n.Paths), n.Status,
 		n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
-	return err
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(n.ProjectID, n.ID)
 }
 
 func stringsJSON(v []string) string {
@@ -255,7 +273,10 @@ func (s *Store) GetNode(projectID, id string) (model.Node, error) {
 func (s *Store) UpdateNodeContent(n model.Node) error {
 	_, err := s.db.Exec(`UPDATE nodes SET title=?, body=?, covers=?, updated_at=? WHERE project_id=? AND id=?`,
 		n.Title, n.Body, coversJSON(n.Covers), now(), n.ProjectID, n.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(n.ProjectID, n.ID)
 }
 
 func (s *Store) SetNodeStatus(projectID, id, status string) error {
@@ -275,6 +296,9 @@ func (s *Store) DeleteNode(projectID, id string) error {
 		return err
 	}
 	if _, err := s.db.Exec(`DELETE FROM deps WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
 		return err
 	}
 	return s.DeleteEvidence(projectID, id)
@@ -314,7 +338,10 @@ func (s *Store) ListChildren(projectID, parentID string) ([]model.Node, error) {
 func (s *Store) InsertAC(projectID string, ac model.AC) error {
 	_, err := s.db.Exec(`INSERT INTO acceptance_criteria (id, project_id, story_id, given_, when_, then_, position) VALUES (?,?,?,?,?,?,?)`,
 		ac.ID, projectID, ac.StoryID, ac.Given, ac.When, ac.Then, ac.Position)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(projectID, ac.StoryID)
 }
 
 func (s *Store) UpdateAC(projectID string, ac model.AC) error {
@@ -326,10 +353,12 @@ func (s *Store) UpdateAC(projectID string, ac model.AC) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("acceptance criterion %q: %w", ac.ID, ErrNotFound)
 	}
-	return nil
+	return s.reindexNode(projectID, ac.StoryID)
 }
 
 func (s *Store) DeleteAC(projectID, id string) error {
+	var storyID string
+	s.db.QueryRow(`SELECT story_id FROM acceptance_criteria WHERE project_id=? AND id=?`, projectID, id).Scan(&storyID)
 	res, err := s.db.Exec(`DELETE FROM acceptance_criteria WHERE project_id=? AND id=?`, projectID, id)
 	if err != nil {
 		return err
@@ -337,7 +366,7 @@ func (s *Store) DeleteAC(projectID, id string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("acceptance criterion %q: %w", id, ErrNotFound)
 	}
-	return nil
+	return s.reindexNode(projectID, storyID)
 }
 
 func (s *Store) GetAC(projectID, id string) (model.AC, error) {
@@ -496,44 +525,116 @@ func (s *Store) ListEvents(projectID string, limit int) ([]Event, error) {
 	return out, rows.Err()
 }
 
-// ---- search ----
+// ---- search (FTS5) ----
 
-// escapeLike escapes LIKE wildcards so user queries match literally.
-func escapeLike(q string) string {
-	q = strings.ReplaceAll(q, `\`, `\\`)
-	q = strings.ReplaceAll(q, `%`, `\%`)
-	q = strings.ReplaceAll(q, `_`, `\_`)
-	return q
+// buildFTSQuery turns free text into a safe FTS5 query: terms are quoted so
+// operators and punctuation stay literal, joined with AND, and the last term
+// matches as a word prefix. Terms without any letter or digit are dropped.
+func buildFTSQuery(q string) string {
+	terms := strings.Fields(q)
+	var parts []string
+	for _, t := range terms {
+		hasWord := false
+		for _, r := range t {
+			if ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || r > 127 {
+				hasWord = true
+				break
+			}
+		}
+		if !hasWord {
+			continue
+		}
+		parts = append(parts, `"`+strings.ReplaceAll(t, `"`, `""`)+`"`)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	parts[len(parts)-1] += "*"
+	return strings.Join(parts, " AND ")
 }
 
-// SearchNodes returns nodes whose title or body contains the query
-// (case-insensitive).
-func (s *Store) SearchNodes(projectID, query string) ([]model.Node, error) {
-	pat := "%" + escapeLike(query) + "%"
-	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND (title LIKE ? ESCAPE '\' COLLATE NOCASE OR body LIKE ? ESCAPE '\' COLLATE NOCASE) ORDER BY id`,
-		projectID, pat, pat)
+type FTSHit struct {
+	NodeID  string
+	Snippet string
 }
 
-// SearchACs returns acceptance criteria whose given/when/then contains the
-// query (case-insensitive).
-func (s *Store) SearchACs(projectID, query string) ([]model.AC, error) {
-	pat := "%" + escapeLike(query) + "%"
-	rows, err := s.db.Query(`SELECT id, story_id, given_, when_, then_, position FROM acceptance_criteria
-		WHERE project_id=? AND (given_ LIKE ? ESCAPE '\' COLLATE NOCASE OR when_ LIKE ? ESCAPE '\' COLLATE NOCASE OR then_ LIKE ? ESCAPE '\' COLLATE NOCASE) ORDER BY id`,
-		projectID, pat, pat, pat)
+// SearchFTS returns matching nodes ordered by BM25 relevance with a snippet
+// around the matches. AC text is folded into its story's index row.
+func (s *Store) SearchFTS(projectID, query string) ([]FTSHit, error) {
+	match := buildFTSQuery(query)
+	if match == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT node_id, snippet(specs_fts, 2, '', '', '…', 12)
+		FROM specs_fts WHERE specs_fts MATCH ? AND project_id=? ORDER BY bm25(specs_fts)`, match, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.AC
+	var out []FTSHit
 	for rows.Next() {
-		var ac model.AC
-		if err := rows.Scan(&ac.ID, &ac.StoryID, &ac.Given, &ac.When, &ac.Then, &ac.Position); err != nil {
+		var h FTSHit
+		if err := rows.Scan(&h.NodeID, &h.Snippet); err != nil {
 			return nil, err
 		}
-		out = append(out, ac)
+		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// reindexNode rewrites a node's FTS row from title, body and (for stories)
+// its acceptance-criterion text.
+func (s *Store) reindexNode(projectID, nodeID string) error {
+	if nodeID == "" {
+		return nil
+	}
+	n, err := s.GetNode(projectID, nodeID)
+	if errors.Is(err, ErrNotFound) {
+		_, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, nodeID)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	text := n.Title + "\n" + n.Body
+	if n.Kind == model.KindStory {
+		acs, err := s.ListACs(projectID, nodeID)
+		if err != nil {
+			return err
+		}
+		for _, ac := range acs {
+			text += "\n" + ac.Given + " " + ac.When + " " + ac.Then
+		}
+	}
+	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, nodeID); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO specs_fts (project_id, node_id, body) VALUES (?,?,?)`, projectID, nodeID, text)
+	return err
+}
+
+func (s *Store) reindexAll() error {
+	rows, err := s.db.Query(`SELECT project_id, id FROM nodes`)
+	if err != nil {
+		return err
+	}
+	type key struct{ p, n string }
+	var keys []key
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.p, &k.n); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	for _, k := range keys {
+		if err := s.reindexNode(k.p, k.n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MaxEventSeq returns the highest event sequence for a project (0 when none).
