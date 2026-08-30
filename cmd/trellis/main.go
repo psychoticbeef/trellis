@@ -41,7 +41,9 @@ Usage:
   trellis affected <project-id> <path>                         stories declaring a file/folder
   trellis board <project-id> [-o <file>] [--serve [--addr]]    write or serve the HTML spec board
   trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
-  trellis release <project-id>                                 merge base into release with feature manifest
+  trellis release <project-id>                                 merge base into release with feature manifest + backup
+  trellis export <project-id> [-o <file>]                      write the spec database as YAML
+  trellis import -f <file> --name <name> --repo <path>         restore an export into a new project
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -82,6 +84,10 @@ func run(args []string) error {
 		return cmdGate(rest)
 	case "release":
 		return cmdRelease(rest)
+	case "export":
+		return cmdExport(rest)
+	case "import":
+		return cmdImport(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -390,6 +396,62 @@ func cmdRelease(args []string) error {
 		return err
 	}
 	fmt.Println(msg)
+	return nil
+}
+
+func cmdExport(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: trellis export <project-id> [-o file]")
+	}
+	id, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	out := fs.String("o", "trellis-specs.yaml", "output file")
+	fs.Parse(rest)
+	e, st, err := engine(id)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	doc, err := e.ExportYAML()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, []byte(doc), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("export written to %s\n", *out)
+	return nil
+}
+
+func cmdImport(args []string) error {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	file := fs.String("f", "", "export file (required)")
+	name := fs.String("name", "", "new project name (required)")
+	repo := fs.String("repo", "", "repo path for the new project (required)")
+	fs.Parse(args)
+	if *file == "" || *name == "" || *repo == "" {
+		return fmt.Errorf("import requires -f, --name and --repo")
+	}
+	data, err := os.ReadFile(*file)
+	if err != nil {
+		return err
+	}
+	repoAbs, err := filepath.Abs(*repo)
+	if err != nil {
+		return err
+	}
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	suffix := make([]byte, 2)
+	rand.Read(suffix)
+	id := fmt.Sprintf("%s-%s", slugify(*name), hex.EncodeToString(suffix))
+	if err := core.Import(st, data, store.Project{ID: id, Name: *name, RepoPath: repoAbs}); err != nil {
+		return err
+	}
+	fmt.Printf("imported as project %s\n", id)
 	return nil
 }
 

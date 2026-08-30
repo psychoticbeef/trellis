@@ -9,6 +9,7 @@ import (
 	"testing"
 	"trellis/internal/core"
 	"trellis/internal/model"
+	"trellis/internal/store"
 )
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -781,5 +782,103 @@ func TestReleaseFlowIntegration_IT_22(t *testing.T) {
 	manifest = git(t, repo, "show", "main:FEATURES.md")
 	if !strings.Contains(manifest, a.story) || !strings.Contains(manifest, b.story) {
 		t.Fatalf("manifest incomplete:\n%s", manifest)
+	}
+}
+
+// TestExportImportIntegration_IT_25 proves IT-25 (US-25 "YAML export and
+// import"): full round trip over a populated project incl. sequencing links,
+// pins, evidence, glossary and counters; release commits the backup file.
+func TestExportImportIntegration_IT_25(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	p.ReleaseBranch = "main"
+	p.Description = "spec tracking"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate: cc + dep, done story with evidence, second story with
+	// sequencing link, glossary, paths.
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	a := fullTree(t, e)
+	if err := e.LinkDep(a.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	approve(t, e, a.arch)
+	if _, err := e.SetPaths(a.story, []string{"pkg"}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "pkg/x.go"), "package pkg")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "pkg")
+	if _, err := e.Transition(a.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(a.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+	wt := wtPath(repo, a.story)
+	writeFile(t, filepath.Join(wt, "impl.txt"), "x")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "impl")
+	if _, err := e.Transition(a.story, "finish"); err != nil {
+		t.Fatal(err)
+	}
+	b := fullTree(t, e)
+	if err := e.LinkDep(b.story, a.story); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DefineTerm("gate", "guard that blocks a transition"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Round trip.
+	doc, err := e.ExportYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Import(st, []byte(doc), store.Project{ID: "p9", Name: "test", RepoPath: repo}); err != nil {
+		t.Fatal(err)
+	}
+	e9, err := core.NewEngine(st, "p9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc9, err := e9.ExportYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc != doc9 {
+		t.Fatalf("round trip diverged:\n%s\n---\n%s", doc, doc9)
+	}
+	// Approvals survived: the done story is still fresh in the copy.
+	if n, _ := e9.Node(a.arch); !n.Fresh {
+		t.Fatalf("imported arch not fresh: %v", n.Problems)
+	}
+	if got := status(t, e9, a.story); got != "done" {
+		t.Fatalf("imported status = %s, want done", got)
+	}
+
+	// Release commits the backup beside the manifest.
+	if _, err := e.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if out := git(t, repo, "show", "main:trellis-specs.yaml"); !strings.Contains(out, "trellis_export: 1") {
+		t.Fatalf("backup missing on release branch:\n%.200s", out)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "trellis-specs.yaml")); err == nil {
+		t.Fatal("backup leaked onto the base branch")
 	}
 }
