@@ -123,6 +123,14 @@ func (e *Engine) finish(story model.Node) (string, error) {
 	} else if !clean {
 		return "", fmt.Errorf("finish blocked: worktree not clean, commit all changes first")
 	}
+	// Gate on the future merge result: everything tested below must contain
+	// the base tip, otherwise the merge commit itself was never exercised.
+	if upToDate, err := g.IsAncestor(e.Project.BaseBranch, branch); err != nil {
+		return "", err
+	} else if !upToDate {
+		return "", fmt.Errorf("finish blocked: %s is behind %s: merge or rebase %s into %s first, then finish again",
+			branch, e.Project.BaseBranch, e.Project.BaseBranch, branch)
+	}
 
 	if e.Project.LintCmd != "" {
 		if out, err := runShell(e.Project.RepoPath, e.Project.LintCmd); err != nil {

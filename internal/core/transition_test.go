@@ -303,3 +303,52 @@ func TestLivingDoneTreeIntegration_IT_8(t *testing.T) {
 		t.Fatalf("status = %s after re-approval, want done", got)
 	}
 }
+
+// TestMergeGateIntegration_IT_9 proves IT-9 (US-9 "Merge gate"): a feature
+// branch behind the base blocks finish naming both branches and the catch-up
+// instruction; after merging base into feature the same finish passes.
+func TestMergeGateIntegration_IT_9(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance the base with an unrelated commit while the feature is active.
+	git(t, repo, "checkout", "develop")
+	writeFile(t, filepath.Join(repo, "unrelated.txt"), "x")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "base moved")
+	git(t, repo, "checkout", "feature/"+tr.story)
+
+	_, err := e.Transition(tr.story, "finish")
+	wantErr(t, err, "finish blocked", "feature/"+tr.story+" is behind develop",
+		"merge or rebase develop into feature/"+tr.story)
+
+	// Catch up, then the same finish passes and merges.
+	git(t, repo, "merge", "develop", "-m", "catch up")
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish after catch-up: %v", err)
+	}
+	if got := status(t, e, tr.story); got != "done" {
+		t.Fatalf("status = %s, want done", got)
+	}
+}

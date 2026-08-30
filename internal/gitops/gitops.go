@@ -3,6 +3,7 @@
 package gitops
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -67,6 +68,22 @@ func (g Git) EnsureFeatureBranch(branch, base string) error {
 	}
 	_, err = g.run("checkout", "-b", branch, base)
 	return err
+}
+
+// IsAncestor reports whether ancestor is an ancestor of (or equal to) the
+// descendant ref.
+func (g Git) IsAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = g.Dir
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", ancestor, descendant, err)
 }
 
 // MergeToBase merges the feature branch into base with --no-ff and deletes the
