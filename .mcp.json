@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "trellis": {
+      "command": "./bin/trellis",
+      "args": ["serve", "--project", "trellis-980f"]
+    }
+  }
+}

@@ -1,0 +1,337 @@
+// trellis: deterministic spec tracking and story gating for LLM-driven development.
+//
+// The agent talks to trellis only via MCP (trellis serve); the CLI is the
+// human's window: init, config, inspection, prune.
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"trellis/internal/core"
+	"trellis/internal/mcpserver"
+	"trellis/internal/store"
+)
+
+const version = "0.1.0"
+
+const usage = `trellis %s — deterministic spec tracking for LLM-driven development
+
+Usage:
+  trellis init --name <name> --repo <path> [--base <branch>]   create a project
+  trellis projects                                             list projects
+  trellis config <project-id> [flags]                          show or set config
+      --repo <path> --base <branch> --lint <cmd> --test <cmd> --junit <glob>
+  trellis serve --project <project-id>                         run MCP server (stdio)
+  trellis tree <project-id> <story-id>                         print a story's spec tree
+  trellis log <project-id> [-n <count>]                        print the event log
+  trellis prune <project-id> <story-id>                        delete a done story's tree
+
+Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
+`
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "trellis:", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	if len(args) == 0 {
+		fmt.Printf(usage, version)
+		return nil
+	}
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "init":
+		return cmdInit(rest)
+	case "projects":
+		return cmdProjects()
+	case "config":
+		return cmdConfig(rest)
+	case "serve":
+		return cmdServe(rest)
+	case "tree":
+		return cmdTree(rest)
+	case "log":
+		return cmdLog(rest)
+	case "prune":
+		return cmdPrune(rest)
+	case "--version", "version":
+		fmt.Println("trellis", version)
+		return nil
+	default:
+		fmt.Printf(usage, version)
+		return fmt.Errorf("unknown command %q", cmd)
+	}
+}
+
+func dataDir() (string, error) {
+	if d := os.Getenv("TRELLIS_DATA_DIR"); d != "" {
+		return d, os.MkdirAll(d, 0o755)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	d := filepath.Join(home, ".local", "share", "trellis")
+	return d, os.MkdirAll(d, 0o755)
+}
+
+func openStore() (*store.Store, error) {
+	d, err := dataDir()
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(filepath.Join(d, "trellis.db"))
+}
+
+func engine(projectID string) (*core.Engine, *store.Store, error) {
+	st, err := openStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	e, err := core.NewEngine(st, projectID)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	return e, st, nil
+}
+
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	s = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
+}
+
+func cmdInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	name := fs.String("name", "", "project name (required)")
+	repo := fs.String("repo", "", "path to the git repository trellis manages (required)")
+	base := fs.String("base", "develop", "base branch features merge into")
+	fs.Parse(args)
+	if *name == "" || *repo == "" {
+		return fmt.Errorf("init requires --name and --repo")
+	}
+	repoAbs, err := filepath.Abs(*repo)
+	if err != nil {
+		return err
+	}
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	suffix := make([]byte, 2)
+	rand.Read(suffix)
+	id := fmt.Sprintf("%s-%s", slugify(*name), hex.EncodeToString(suffix))
+	if err := st.CreateProject(store.Project{ID: id, Name: *name, RepoPath: repoAbs, BaseBranch: *base}); err != nil {
+		return err
+	}
+	fmt.Printf(`project created: %s
+
+Next steps:
+1. Configure the gates:
+   trellis config %s --lint '<lint cmd>' --test '<test cmd producing junit xml>' --junit '<glob, e.g. reports/*.xml>'
+2. Register the MCP server in the repo (.mcp.json):
+   {"mcpServers": {"trellis": {"command": "trellis", "args": ["serve", "--project", "%s"]}}}
+3. Point the agent at it (AGENTS.md):
+   trellis-project: %s
+   (Specs, tickets and story state live in trellis; use its MCP tools. It is the single source of truth.)
+`, id, id, id, id)
+	return nil
+}
+
+func cmdProjects() error {
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	projects, err := st.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		fmt.Println("no projects; create one with trellis init")
+		return nil
+	}
+	for _, p := range projects {
+		fmt.Printf("%-24s %-16s repo=%s base=%s\n", p.ID, p.Name, p.RepoPath, p.BaseBranch)
+	}
+	return nil
+}
+
+func cmdConfig(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("config requires a project id")
+	}
+	id, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	repo := fs.String("repo", "", "repo path")
+	base := fs.String("base", "", "base branch")
+	lint := fs.String("lint", "", "lint command (run before merge)")
+	test := fs.String("test", "", "test command (must write junit xml)")
+	junit := fs.String("junit", "", "junit report glob, relative to repo")
+	fs.Parse(rest)
+
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	p, err := st.GetProject(id)
+	if err != nil {
+		return err
+	}
+	changed := false
+	set := func(dst *string, v string) {
+		if v != "" {
+			*dst = v
+			changed = true
+		}
+	}
+	set(&p.RepoPath, *repo)
+	set(&p.BaseBranch, *base)
+	set(&p.LintCmd, *lint)
+	set(&p.TestCmd, *test)
+	set(&p.JUnitGlob, *junit)
+	if changed {
+		if err := st.UpdateProject(p); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
+		p.ID, p.Name, p.RepoPath, p.BaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
+	return nil
+}
+
+func orEmpty(s string) string {
+	if s == "" {
+		return "(not set)"
+	}
+	return s
+}
+
+func cmdServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	project := fs.String("project", "", "project id (required)")
+	fs.Parse(args)
+	if *project == "" {
+		return fmt.Errorf("serve requires --project")
+	}
+	e, st, err := engine(*project)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	srv := mcpserver.New(e, version)
+	return srv.Run(context.Background(), &mcp.StdioTransport{})
+}
+
+func cmdTree(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: trellis tree <project-id> <story-id>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	r, err := e.Tree(args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s [%s] %s\n", r.Story.ID, r.Status, r.Story.Title)
+	for _, ac := range r.ACs {
+		fmt.Printf("  %s  given %s / when %s / then %s  (covered by %v)\n", ac.ID, ac.Given, ac.When, ac.Then, ac.CoveredBy)
+	}
+	var walk func(n core.TreeNode, indent string)
+	walk = func(n core.TreeNode, indent string) {
+		mark := "✓"
+		if !n.Fresh {
+			mark = "✗"
+		}
+		extra := ""
+		if len(n.Covers) > 0 {
+			extra = fmt.Sprintf(" covers=%v", n.Covers)
+		}
+		for _, d := range n.Deps {
+			state := "fresh"
+			if !d.Fresh {
+				state = "STALE"
+			}
+			extra += fmt.Sprintf(" dep=%s(%s)", d.Target, state)
+		}
+		fmt.Printf("%s%s %s (%s) %s%s\n", indent, mark, n.ID, n.Kind, n.Title, extra)
+		for _, p := range n.Problems {
+			fmt.Printf("%s    ! %s\n", indent, p)
+		}
+		for _, c := range n.Children {
+			walk(c, indent+"  ")
+		}
+	}
+	for _, c := range r.Story.Children {
+		walk(c, "  ")
+	}
+	if len(r.Integrity) == 0 {
+		fmt.Println("gates: open")
+	} else {
+		fmt.Println("gates: blocked")
+		for _, p := range r.Integrity {
+			fmt.Println("  -", p)
+		}
+	}
+	return nil
+}
+
+func cmdLog(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: trellis log <project-id> [-n count]")
+	}
+	id, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("log", flag.ExitOnError)
+	n := fs.Int("n", 50, "number of events")
+	fs.Parse(rest)
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	events, err := st.ListEvents(id, *n)
+	if err != nil {
+		return err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		fmt.Printf("%s  %-15s %-8s %s\n", e.TS, e.Action, e.NodeID, e.Detail)
+	}
+	return nil
+}
+
+func cmdPrune(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: trellis prune <project-id> <story-id>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := e.Prune(args[1]); err != nil {
+		return err
+	}
+	fmt.Printf("%s pruned\n", args[1])
+	return nil
+}

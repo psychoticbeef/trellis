@@ -1,0 +1,248 @@
+// Package mcpserver exposes the trellis engine over MCP (stdio). This is the
+// only write interface an agent gets: the database itself stays hidden, and
+// every illegal move comes back as a tool error explaining what was illegal.
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"trellis/internal/core"
+	"trellis/internal/model"
+)
+
+const instructions = `trellis is the single source of truth for specs and story state.
+
+Workflow per story:
+1. create_node kind=story, add acceptance criteria (add_acceptance_criterion).
+2. Build the full spec tree: acceptance_test specs (each AC covered), exactly one
+   arch spec, under it integration_test specs and detail_design nodes, under each
+   detail design unit_test specs. Cross-cutting architecture lives in
+   cross_cutting root nodes; reference them via link_dependency.
+3. Approve every node top-down with approve(node_id, content_hash). Hashes come
+   from get_node/get_tree — you must read a node to approve it.
+4. transition(story, "refine") -> "start" (creates/checks out feature branch)
+   -> implement -> "finish" (lint, tests, verifies every test spec has a
+   passing test referencing its id, merges into the base branch).
+
+Test naming: a test proves spec UT-3 iff its name contains "UT-3" or "UT_3".
+Editing any node invalidates approvals of its children/dependents and drops
+affected refined/in_progress stories back to todo. Statuses can never be set
+directly; only transitions move them.`
+
+type Server struct {
+	engine *core.Engine
+}
+
+func New(engine *core.Engine, version string) *mcp.Server {
+	s := &Server{engine: engine}
+	srv := mcp.NewServer(
+		&mcp.Implementation{Name: "trellis", Title: "trellis spec tracker", Version: version},
+		&mcp.ServerOptions{Instructions: instructions},
+	)
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_overview",
+		Description: "Project overview: all stories with status and gate readiness, cross-cutting specs, stale nodes."},
+		s.getOverview)
+	mcp.AddTool(srv, &mcp.Tool{Name: "create_node",
+		Description: "Create a spec node. Kinds and required parents: story (none), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
+		s.createNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "update_node",
+		Description: "Update a node's title/body/covers. Invalidates the node's approval and makes all children and dependents stale."},
+		s.updateNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "delete_node",
+		Description: "Delete a node. Blocked while it has children or dependents."},
+		s.deleteNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_node",
+		Description: "Full content of one node incl. content_hash (needed for approve) and current hashes of its dependencies."},
+		s.getNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_tree",
+		Description: "Full spec tree of a story: nodes with hashes and freshness, AC coverage, and the exact list of problems blocking refine/start/finish."},
+		s.getTree)
+	mcp.AddTool(srv, &mcp.Tool{Name: "add_acceptance_criterion",
+		Description: "Add a structured acceptance criterion (given/when/then) to a story."},
+		s.addAC)
+	mcp.AddTool(srv, &mcp.Tool{Name: "update_acceptance_criterion",
+		Description: "Update an acceptance criterion. Changes the story's content hash and invalidates child approvals."},
+		s.updateAC)
+	mcp.AddTool(srv, &mcp.Tool{Name: "delete_acceptance_criterion",
+		Description: "Delete an acceptance criterion. Blocked while an acceptance test covers it."},
+		s.deleteAC)
+	mcp.AddTool(srv, &mcp.Tool{Name: "approve",
+		Description: "Approve a node after reviewing it. content_hash must be the node's current hash (from get_node) — proof you read it. If the node has dependencies, pass dep_hashes {target_id: its current content_hash}. Parents must be approved before children."},
+		s.approve)
+	mcp.AddTool(srv, &mcp.Tool{Name: "link_dependency",
+		Description: "Declare that a node depends on another node (typically a cross_cutting spec). Target must be approved and fresh."},
+		s.linkDep)
+	mcp.AddTool(srv, &mcp.Tool{Name: "unlink_dependency",
+		Description: "Remove a dependency link."},
+		s.unlinkDep)
+	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
+		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch)."},
+		s.transition)
+	return srv
+}
+
+// ---- inputs ----
+
+type createNodeIn struct {
+	Kind     string   `json:"kind" jsonschema:"story | acceptance_test | arch | integration_test | detail_design | unit_test | cross_cutting"`
+	ParentID string   `json:"parent_id,omitempty" jsonschema:"parent node id; omit for story and cross_cutting"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
+	Covers   []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
+}
+
+type updateNodeIn struct {
+	ID     string    `json:"id"`
+	Title  *string   `json:"title,omitempty"`
+	Body   *string   `json:"body,omitempty"`
+	Covers *[]string `json:"covers,omitempty"`
+}
+
+type idIn struct {
+	ID string `json:"id"`
+}
+
+type storyIn struct {
+	StoryID string `json:"story_id"`
+}
+
+type addACIn struct {
+	StoryID string `json:"story_id"`
+	Given   string `json:"given"`
+	When    string `json:"when"`
+	Then    string `json:"then"`
+}
+
+type updateACIn struct {
+	ACID  string  `json:"ac_id"`
+	Given *string `json:"given,omitempty"`
+	When  *string `json:"when,omitempty"`
+	Then  *string `json:"then,omitempty"`
+}
+
+type acIDIn struct {
+	ACID string `json:"ac_id"`
+}
+
+type approveIn struct {
+	NodeID      string            `json:"node_id"`
+	ContentHash string            `json:"content_hash" jsonschema:"the node's current content_hash from get_node"`
+	DepHashes   map[string]string `json:"dep_hashes,omitempty" jsonschema:"for each dependency target: its current content_hash"`
+}
+
+type depIn struct {
+	NodeID   string `json:"node_id"`
+	TargetID string `json:"target_id"`
+}
+
+type transitionIn struct {
+	StoryID string `json:"story_id"`
+	Action  string `json:"action" jsonschema:"refine | start | finish"`
+}
+
+type okOut struct {
+	Message string `json:"message"`
+}
+
+// ---- handlers ----
+
+func (s *Server) getOverview(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, core.Overview, error) {
+	o, err := s.engine.Overview()
+	return nil, o, err
+}
+
+func (s *Server) createNode(_ context.Context, _ *mcp.CallToolRequest, in createNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
+	n, err := s.engine.CreateNode(model.Kind(in.Kind), in.ParentID, in.Title, in.Body, in.Covers)
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	r, err := s.engine.Node(n.ID)
+	return nil, r, err
+}
+
+func (s *Server) updateNode(_ context.Context, _ *mcp.CallToolRequest, in updateNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
+	n, err := s.engine.UpdateNode(in.ID, in.Title, in.Body, in.Covers)
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	r, err := s.engine.Node(n.ID)
+	return nil, r, err
+}
+
+func (s *Server) deleteNode(_ context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DeleteNode(in.ID); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: in.ID + " deleted"}, nil
+}
+
+func (s *Server) getNode(_ context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, core.NodeReport, error) {
+	r, err := s.engine.Node(in.ID)
+	return nil, r, err
+}
+
+// getTree returns Out as `any`: TreeReport is recursive and the SDK cannot
+// infer a JSON schema for cyclic types, so the output schema is omitted.
+func (s *Server) getTree(_ context.Context, _ *mcp.CallToolRequest, in storyIn) (*mcp.CallToolResult, any, error) {
+	r, err := s.engine.Tree(in.StoryID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, r, nil
+}
+
+func (s *Server) addAC(_ context.Context, _ *mcp.CallToolRequest, in addACIn) (*mcp.CallToolResult, okOut, error) {
+	ac, err := s.engine.AddAC(in.StoryID, in.Given, in.When, in.Then)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: fmt.Sprintf("%s added to %s", ac.ID, in.StoryID)}, nil
+}
+
+func (s *Server) updateAC(_ context.Context, _ *mcp.CallToolRequest, in updateACIn) (*mcp.CallToolResult, okOut, error) {
+	ac, err := s.engine.UpdateAC(in.ACID, in.Given, in.When, in.Then)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: ac.ID + " updated; story hash changed, child approvals invalidated"}, nil
+}
+
+func (s *Server) deleteAC(_ context.Context, _ *mcp.CallToolRequest, in acIDIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DeleteAC(in.ACID); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: in.ACID + " deleted"}, nil
+}
+
+func (s *Server) approve(_ context.Context, _ *mcp.CallToolRequest, in approveIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.Approve(in.NodeID, in.ContentHash, in.DepHashes); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: in.NodeID + " approved"}, nil
+}
+
+func (s *Server) linkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.LinkDep(in.NodeID, in.TargetID); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: fmt.Sprintf("%s now depends on %s", in.NodeID, in.TargetID)}, nil
+}
+
+func (s *Server) unlinkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.UnlinkDep(in.NodeID, in.TargetID); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: fmt.Sprintf("dependency %s -> %s removed", in.NodeID, in.TargetID)}, nil
+}
+
+func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {
+	msg, err := s.engine.Transition(in.StoryID, in.Action)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: msg}, nil
+}
