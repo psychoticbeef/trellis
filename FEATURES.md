@@ -1,4 +1,8 @@
-# Features
+# trellis
+
+> Deterministic spec tracking and story gating for LLM-driven development: hash-approved spec trees, gated gitflow in worktrees, test evidence as the definition of done.
+
+## Features
 
 - **US-1** — Spec tree management
 - **US-2** — Structured acceptance criteria
@@ -22,8 +26,10 @@
 - **US-21** — Project glossary
 - **US-22** — Release cut with feature manifest
 - **US-23** — Boards served by the MCP server
+- **US-24** — Project description
+- **US-25** — YAML export and import
 
-# Glossary
+## Glossary
 
 - **acceptance criterion** — Structured given/when/then requirement on a story; every one must be covered by an acceptance test spec.
 - **approval** — Hash-proof that a reviewer read a node's current content; parents before children, dependencies re-pinned.

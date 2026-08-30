@@ -1,0 +1,1753 @@
+trellis_export: 1
+project:
+    name: trellis
+    description: 'Deterministic spec tracking and story gating for LLM-driven development: hash-approved spec trees, gated gitflow in worktrees, test evidence as the definition of done.'
+    base_branch: develop
+    release_branch: main
+    lint_cmd: gofmt -l . | tee /dev/stderr | wc -l | grep -q "^ *0$" && go vet ./...
+    test_cmd: mkdir -p reports && go run gotest.tools/gotestsum@latest --junitfile reports/tests.xml ./...
+    junit_glob: reports/*.xml
+glossary:
+    - term: acceptance criterion
+      definition: Structured given/when/then requirement on a story; every one must be covered by an acceptance test spec.
+    - term: approval
+      definition: Hash-proof that a reviewer read a node's current content; parents before children, dependencies re-pinned.
+    - term: base branch
+      definition: The branch that only receives trellis merges (default develop); direct commits are gate-blocked.
+    - term: cross-cutting spec
+      definition: Root-level architecture decision, referenced from arch specs via hash-pinned dependency links.
+    - term: evidence
+      definition: The proving tests recorded per test spec at finish; latest run replaces older records.
+    - term: gate
+      definition: 'A guard that must pass before a transition proceeds: structure, freshness, lint, tests, evidence, up-to-date branch.'
+    - term: living context
+      definition: Done specs stay editable so context tracks reality; honesty comes from stale markers, not locks.
+    - term: prune
+      definition: Hard delete of a done story's tree when its feature leaves the product; the only way spec content disappears.
+    - term: sequencing link
+      definition: 'Unpinned story-to-story dependency: start waits until the prerequisite story is done.'
+    - term: spec tree
+      definition: 'One story''s hierarchy: acceptance tests, exactly one arch spec, integration tests, detail designs, unit test specs.'
+    - term: stale
+      definition: An approval invalidated by a content, parent or dependency change; cleared only by re-approval.
+    - term: story
+      definition: 'Unit of work: a spec tree plus the gated lifecycle todo -> refined -> in_progress -> done.'
+    - term: story worktree
+      definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
+counters:
+    AS: 25
+    AT: 29
+    CC: 4
+    DD: 26
+    IT: 25
+    US: 25
+    UT: 26
+    ac:US-1: 3
+    ac:US-2: 3
+    ac:US-3: 4
+    ac:US-4: 4
+    ac:US-5: 4
+    ac:US-6: 5
+    ac:US-7: 4
+    ac:US-8: 3
+    ac:US-9: 2
+    ac:US-10: 3
+    ac:US-11: 4
+    ac:US-12: 3
+    ac:US-13: 4
+    ac:US-14: 3
+    ac:US-15: 2
+    ac:US-16: 3
+    ac:US-17: 6
+    ac:US-18: 3
+    ac:US-19: 4
+    ac:US-20: 2
+    ac:US-21: 4
+    ac:US-22: 4
+    ac:US-23: 4
+    ac:US-24: 3
+    ac:US-25: 4
+cross_cutting:
+    - id: CC-1
+      kind: cross_cutting
+      title: Hidden database, MCP-only writes
+      body: The SQLite database lives outside every managed repository ($TRELLIS_DATA_DIR, default ~/.local/share/trellis). Agents read and write exclusively through the MCP tool surface; there is no MCP tool that can reconfigure gate commands (lint/test/junit are CLI-only). The store layer contains no business rules — every mutation passes the engine's guards.
+      approved_content_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+    - id: CC-2
+      kind: cross_cutting
+      title: Machine-readable exhaustive errors
+      body: Every rejected operation returns an error that (a) names the violated rule, (b) lists ALL current violations, not just the first, and (c) names the concrete node/AC ids involved, so an agent can repair everything in one pass. Errors never leak information that would allow blind retries (e.g. approve never echoes the expected hash).
+      approved_content_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+    - id: CC-3
+      kind: cross_cutting
+      title: Append-only event log
+      body: Every mutation appends an event (create/update/delete/approve/link/transition/auto_downgrade/prune) with timestamp and detail. The log is invisible to agents; humans read it via `trellis log`. A failed event write never blocks the mutation itself.
+      approved_content_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
+    - id: CC-4
+      kind: cross_cutting
+      title: Done specs are living context
+      body: 'trellis keeps no obsolete content: no superseded states, no soft deletes, no archive. Done story trees are the durable context source and must track reality: they stay editable after done, so context is corrected in place instead of superseded. Honesty comes from hashes, not locks — every unreviewed change shows as a stale marker until someone re-reads and re-approves, and done stories are never reopened automatically. When a feature leaves the product, prune removes its tree whole.'
+      approved_content_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+stories:
+    - id: US-1
+      kind: story
+      title: Spec tree management
+      body: As a development agent I manage a strict spec tree per user story (story -> acceptance tests + one arch spec -> integration tests + detail designs -> unit test specs) so that every feature is fully specified before implementation starts.
+      status: done
+      acceptance_criteria:
+        - id: US-1.AC-1
+          given: a project
+          when: the agent creates a node with a valid kind and parent
+          then: the node is stored with a unique, never-reused id (US-n, AT-n, ...) and returned with its content hash
+        - id: US-1.AC-2
+          given: an existing tree
+          when: the agent attempts an illegal structural move (wrong parent kind, second arch spec, parent on a root kind, unknown kind)
+          then: the operation is rejected with an error naming the violated rule
+        - id: US-1.AC-3
+          given: a node with children or dependents
+          when: the agent tries to delete it
+          then: deletion is blocked and the error lists every referencing node
+      approved_content_hash: fb0ed6c15b7fe8e4983db58f9f930dfbcf3f82877e3c34355c869ca9248ef421
+      children:
+        - id: AS-1
+          kind: arch
+          title: Engine-mediated tree storage
+          body: All node CRUD flows through core.Engine; the store layer only persists. Tree legality is a declarative parent-kind map plus per-rule guards (arch singleton, covers validation). Ids come from monotonic per-kind counters that never reset, so ids are never reused after deletes.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: a112498c2c03f12d48e459b1335148ec05bf6f76d6fc49cd4f2c2870ed2c94bf
+          approved_parent_hash: fb0ed6c15b7fe8e4983db58f9f930dfbcf3f82877e3c34355c869ca9248ef421
+          children:
+            - id: DD-1
+              kind: detail_design
+              title: Tree rule validation
+              body: CreateNode/UpdateNode/DeleteNode validate against model.ParentKind and per-kind rules before any write; DeleteNode collects children and dependents into one blocking error; story deletion removes its ACs.
+              approved_content_hash: 83c8ddbeeb6c406918690c7472c6f33cb47c5afc2d6cc6d636a69ea2c2b1f24a
+              approved_parent_hash: a112498c2c03f12d48e459b1335148ec05bf6f76d6fc49cd4f2c2870ed2c94bf
+              children:
+                - id: UT-1
+                  kind: unit_test
+                  title: Parent-kind matrix unit tests
+                  body: Unit-test the parent/child legality matrix for all seven kinds, the arch-singleton rule and id allocation monotonicity, directly against the engine with an in-memory store.
+                  approved_content_hash: e1f3ec64e710f9221b77de2eeafa85ae69f203af4d71d61a9511250e1c7fb948
+                  approved_parent_hash: 83c8ddbeeb6c406918690c7472c6f33cb47c5afc2d6cc6d636a69ea2c2b1f24a
+            - id: IT-1
+              kind: integration_test
+              title: Engine CRUD guard integration
+              body: 'Engine + real SQLite store: every guard rejection (illegal parent, second arch, delete with children/dependents) and every happy path, asserting persisted state after each step.'
+              approved_content_hash: fce8abfc47eb397bb02b79da69b203b903fc05efcf2839d25bf82f44123ebfeb
+              approved_parent_hash: a112498c2c03f12d48e459b1335148ec05bf6f76d6fc49cd4f2c2870ed2c94bf
+        - id: AT-1
+          kind: acceptance_test
+          title: Node lifecycle acceptance
+          body: 'Drive the full node lifecycle through the MCP interface against a real server: create a valid tree, attempt each illegal structural move, delete a referenced node. Assert stored ids, returned hashes and exact error contents.'
+          covers:
+            - US-1.AC-1
+            - US-1.AC-2
+            - US-1.AC-3
+          approved_content_hash: b131f29f298697f85096a545a378314013e3a14b7429c7c8390af545691982c0
+          approved_parent_hash: fb0ed6c15b7fe8e4983db58f9f930dfbcf3f82877e3c34355c869ca9248ef421
+    - id: US-2
+      kind: story
+      title: Structured acceptance criteria
+      body: As a product owner I express acceptance criteria as structured given/when/then triples attached to a story so that coverage is mechanically checkable instead of prose interpretation.
+      status: done
+      acceptance_criteria:
+        - id: US-2.AC-1
+          given: a story
+          when: the agent adds an acceptance criterion with non-empty given/when/then
+          then: it is stored with id US-n.AC-m and appears in the story's node report
+        - id: US-2.AC-2
+          given: a refined story
+          when: any acceptance criterion is edited
+          then: the story's content hash changes, all child approvals become stale and the story drops back to todo
+        - id: US-2.AC-3
+          given: an acceptance criterion covered by an acceptance test
+          when: the agent tries to delete it
+          then: deletion is blocked naming the covering test specs
+      approved_content_hash: 3e38cb60948d50f3272d9bfbbe03cb77612faeed5b69b3f6a35831cecdd556aa
+      children:
+        - id: AS-2
+          kind: arch
+          title: ACs as hashed story content
+          body: ACs are first-class rows (own table, own per-story counter) but hash into the story's canonical content document, sorted by id. Coverage is a covers list on acceptance_test nodes, validated against existing AC ids on every write.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 963eb4ce4d511bb2c80f40c2cbd93a06f40add3e35ba865e2a0ae10ec9d7e67c
+          approved_parent_hash: 3e38cb60948d50f3272d9bfbbe03cb77612faeed5b69b3f6a35831cecdd556aa
+          children:
+            - id: DD-2
+              kind: detail_design
+              title: AC storage and hashing
+              body: acceptance_criteria table keyed per project; model.ContentHash embeds sorted AC docs for stories; AddAC/UpdateAC/DeleteAC route through downgradeAffected.
+              approved_content_hash: 39a0b9af2224dc7e87e9470702aac78b33bf03593a607f2282629eb522f680ca
+              approved_parent_hash: 963eb4ce4d511bb2c80f40c2cbd93a06f40add3e35ba865e2a0ae10ec9d7e67c
+              children:
+                - id: UT-2
+                  kind: unit_test
+                  title: Story hash unit tests
+                  body: Unit-test that AC order does not change the story hash, that any AC field edit does, and that covers order is canonicalized.
+                  approved_content_hash: 9469c9eb70e9dd0bae8d4bbc25c42507cad83a377a419d564492b1fe82ce547f
+                  approved_parent_hash: 39a0b9af2224dc7e87e9470702aac78b33bf03593a607f2282629eb522f680ca
+            - id: IT-2
+              kind: integration_test
+              title: AC-story hash integration
+              body: 'Engine + store: AC add/edit/delete each change the story hash; child freshness and story status react; covers validation rejects unknown AC ids listing the known ones.'
+              approved_content_hash: c4b1c0f8b35e4b1353fe25ed2ee279fac544e881f4402bec252026dd1bb02da3
+              approved_parent_hash: 963eb4ce4d511bb2c80f40c2cbd93a06f40add3e35ba865e2a0ae10ec9d7e67c
+        - id: AT-2
+          kind: acceptance_test
+          title: AC lifecycle acceptance
+          body: 'Through MCP: add/update/delete ACs on a story, assert hash change on edit, automatic story downgrade, and the blocked delete while covered.'
+          covers:
+            - US-2.AC-1
+            - US-2.AC-2
+            - US-2.AC-3
+          approved_content_hash: 7bcc0e297954380dd380012744d23bab31ba1b031c810a57729f9951cbe8d710
+          approved_parent_hash: 3e38cb60948d50f3272d9bfbbe03cb77612faeed5b69b3f6a35831cecdd556aa
+    - id: US-3
+      kind: story
+      title: Hash-based approval and invalidation
+      body: As the process owner I want every spec node explicitly approved against the exact content that was read, and every edit to invalidate dependent approvals, so that nothing enters development on stale understanding.
+      status: done
+      acceptance_criteria:
+        - id: US-3.AC-1
+          given: any node
+          when: the agent approves it passing the node's current content hash
+          then: the approval is recorded together with the parent's current hash
+        - id: US-3.AC-2
+          given: a node whose content changed since the agent read it
+          when: the agent approves with the old hash
+          then: approval is rejected and the agent is told to re-read the node; the expected hash is not revealed
+        - id: US-3.AC-3
+          given: a node whose parent is not approved and fresh
+          when: the agent tries to approve the node
+          then: approval is rejected demanding top-down approval
+        - id: US-3.AC-4
+          given: an approved tree
+          when: any node in it is edited
+          then: the edited node and all its children/dependents become stale with reasons naming old and new short-hashes, and affected refined/in_progress stories drop to todo
+      approved_content_hash: d3a2991aacc09bc80ceb50f4d65d4dada6d217294f44fd4ff1900493d88f12f8
+      children:
+        - id: AS-3
+          kind: arch
+          title: Hash-pinned approvals with computed freshness
+          body: 'Approval stores (approved_content_hash, approved_parent_hash) on the node; dependency edges store a pinned target hash. Freshness is always computed, never cached: a node is fresh iff its own, its parent''s and all pinned hashes match current content. Story downgrades are the only eagerly-written consequence.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: 90527130660104d2223acbde44a0150035ce3ab24d3aa90907638fb46b36bd4e
+          approved_parent_hash: d3a2991aacc09bc80ceb50f4d65d4dada6d217294f44fd4ff1900493d88f12f8
+          children:
+            - id: DD-3
+              kind: detail_design
+              title: Freshness computation
+              body: core.freshness derives approval validity from hash comparison alone; reasons are exhaustive and name ids plus 12-char short hashes; downgradeAffected finds the owning story and stories of direct dependents.
+              approved_content_hash: d0b5323d8ca03a86650adbc3910af2bf99f5d8bdf44095e2cbef3fcd4f214ea5
+              approved_parent_hash: 90527130660104d2223acbde44a0150035ce3ab24d3aa90907638fb46b36bd4e
+              children:
+                - id: UT-3
+                  kind: unit_test
+                  title: Freshness reason unit tests
+                  body: Unit-test each freshness reason string (never approved, content changed, parent changed, dependency changed) and that approval re-pins dependency hashes.
+                  approved_content_hash: fd8c0e57aba8ec6ad66cf0d806f35e3bd0117f2836c54487efd9bfa648a8ca59
+                  approved_parent_hash: d0b5323d8ca03a86650adbc3910af2bf99f5d8bdf44095e2cbef3fcd4f214ea5
+            - id: IT-3
+              kind: integration_test
+              title: Invalidation cascade integration
+              body: 'Engine + store: edits at every tree level (story AC, arch, detail design, cross-cutting target) produce the correct stale set, freshness reasons and automatic downgrades.'
+              approved_content_hash: c0e5de84a0b55b1ecc95953eed8635a1a91f113fb804edd9756c2c1786b1ed37
+              approved_parent_hash: 90527130660104d2223acbde44a0150035ce3ab24d3aa90907638fb46b36bd4e
+        - id: AT-3
+          kind: acceptance_test
+          title: Approval flow acceptance
+          body: 'Through MCP: approve with wrong hash, approve child before parent, approve a full tree top-down, edit a mid-tree node and assert the stale cascade and story downgrade.'
+          covers:
+            - US-3.AC-1
+            - US-3.AC-2
+            - US-3.AC-3
+            - US-3.AC-4
+          approved_content_hash: a3cf8437b568d07486bdd4e523a480db0590c90a5f5e3343cb2b4dab92407e5d
+          approved_parent_hash: d3a2991aacc09bc80ceb50f4d65d4dada6d217294f44fd4ff1900493d88f12f8
+    - id: US-4
+      kind: story
+      title: Cross-cutting architecture dependencies
+      body: As an architect I keep cross-cutting decisions in root-level cross_cutting specs and reference them from story arch specs via hash-pinned links, so cross-cutting change forces every affected story to be re-reviewed without breaking the strict tree.
+      status: done
+      acceptance_criteria:
+        - id: US-4.AC-1
+          given: an unapproved cross_cutting spec
+          when: the agent links a node to it
+          then: the link is rejected until the target is approved and fresh
+        - id: US-4.AC-2
+          given: a node with dependencies
+          when: the agent approves it
+          then: approval requires the current content hash of every dependency target as proof of reading
+        - id: US-4.AC-3
+          given: an approved dependency graph
+          when: a cross_cutting spec is edited
+          then: all dependent nodes become stale and their stories drop to todo
+        - id: US-4.AC-4
+          given: a cross_cutting spec with dependents
+          when: the agent tries to delete it
+          then: deletion is blocked listing the dependents
+      approved_content_hash: cc2bd7ac381497ef32ce0baddc89e81feaf1214c74a9da428866b9a2402f49ab
+      children:
+        - id: AS-4
+          kind: arch
+          title: 'Two edge types: child_of tree plus depends_on references'
+          body: The composition tree stays a strict one-parent tree; cross-cutting reuse is a separate n:m depends_on edge set with pinned hashes. Freshness treats a pin mismatch exactly like a parent change. Links carry no content, so linking/unlinking never invalidates by itself.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 76fda07d562507c6d9e23a7d93bdf7227be9f3389b03ad5d67bbf94ad8998560
+          approved_parent_hash: cc2bd7ac381497ef32ce0baddc89e81feaf1214c74a9da428866b9a2402f49ab
+          children:
+            - id: DD-4
+              kind: detail_design
+              title: Dependency edges
+              body: deps table (node_id, target_id, pinned_hash); LinkDep guards target freshness; Approve validates dep_hashes completeness and rejects unknown targets.
+              approved_content_hash: e127497f58683ddd06a4252330450db3ec601149213b19b417b15ec40083dd50
+              approved_parent_hash: 76fda07d562507c6d9e23a7d93bdf7227be9f3389b03ad5d67bbf94ad8998560
+              children:
+                - id: UT-4
+                  kind: unit_test
+                  title: Dep guard unit tests
+                  body: Unit-test self-link rejection, link-to-stale rejection, missing/stale/unknown dep_hashes entries each producing their own error line.
+                  approved_content_hash: c67975f95f715c7cc0f5dff01fc1f70ef77e454e567273990c8888135b11b266
+                  approved_parent_hash: e127497f58683ddd06a4252330450db3ec601149213b19b417b15ec40083dd50
+            - id: IT-4
+              kind: integration_test
+              title: Dependency lifecycle integration
+              body: 'Engine + store: link/unlink, approval re-pinning, cascade on target edit, delete blocking — across two stories sharing one cross_cutting target.'
+              approved_content_hash: 3112c6091715f07305e76ebbbe571401b86ff2223c6bd8b7e60dd82d323cf541
+              approved_parent_hash: 76fda07d562507c6d9e23a7d93bdf7227be9f3389b03ad5d67bbf94ad8998560
+        - id: AT-4
+          kind: acceptance_test
+          title: Cross-cutting flow acceptance
+          body: 'Through MCP: create a cross_cutting spec, link before/after approval, approve a dependent with and without dep hashes, edit the target and assert cascade, attempt the blocked delete.'
+          covers:
+            - US-4.AC-1
+            - US-4.AC-2
+            - US-4.AC-3
+            - US-4.AC-4
+          approved_content_hash: dc6e7f27955f7457c06791cd693a3d1e7457aa370379867baff9be97e3543846
+          approved_parent_hash: cc2bd7ac381497ef32ce0baddc89e81feaf1214c74a9da428866b9a2402f49ab
+    - id: US-5
+      kind: story
+      title: Story state machine with gates
+      body: As the process owner I want story status to move only through guarded transitions (todo -> refined -> in_progress -> done) so that an agent can never skip refinement, start on an incomplete spec, or declare done without evidence.
+      status: done
+      acceptance_criteria:
+        - id: US-5.AC-1
+          given: a story in any state
+          when: the agent attempts a transition whose guards fail
+          then: the transition is rejected listing every blocking problem in one response
+        - id: US-5.AC-2
+          given: a story with an incomplete or partially approved tree
+          when: the agent runs refine
+          then: refine is blocked until every AC is covered, exactly one arch spec with integration tests and detail designs exists, every detail design has unit test specs, and every node is approved and fresh
+        - id: US-5.AC-3
+          given: a story
+          when: the agent tries to set a status directly
+          then: no such operation exists on the tool surface; only refine/start/finish move status
+        - id: US-5.AC-4
+          given: a done story
+          when: the human prunes it
+          then: the whole tree is deleted unless an outside node depends on a tree member
+      approved_content_hash: 1a3e86e43371fa631b3059312af9e445b58f592fe888a857314af990c1fed7dc
+      children:
+        - id: AS-5
+          kind: arch
+          title: Verb-only state machine
+          body: Transitions are verbs with guards, executed by the engine; statuses are never writable data. integrity() computes the full blocking list (structure + coverage + freshness) and is re-checked by every verb. Edits downgrade eagerly so list_stories never lies.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: c6e7ab1cf264ea754864a4762e65901e636000fb0e7862b24d45ab3a881e7fca
+          approved_parent_hash: 1a3e86e43371fa631b3059312af9e445b58f592fe888a857314af990c1fed7dc
+          children:
+            - id: DD-5
+              kind: detail_design
+              title: Integrity computation
+              body: core.integrity aggregates structural rules, AC coverage and per-node freshness into one problem list; Transition dispatches refine/start/finish with requireStatus + requireIntegrity.
+              approved_content_hash: 76e0aea50eb6a56f11eede926d00534f4a8e1c0bee8dd166b95c511634cfa58b
+              approved_parent_hash: c6e7ab1cf264ea754864a4762e65901e636000fb0e7862b24d45ab3a881e7fca
+              children:
+                - id: UT-5
+                  kind: unit_test
+                  title: Guard matrix unit tests
+                  body: Unit-test each structural defect producing exactly its problem line and refine flipping status only on an empty problem list.
+                  approved_content_hash: 8e17cc4f395588fb60f836418fae452b0e77e87c78ed41cddcfe7387bd9a52d3
+                  approved_parent_hash: 76e0aea50eb6a56f11eede926d00534f4a8e1c0bee8dd166b95c511634cfa58b
+            - id: IT-5
+              kind: integration_test
+              title: Transition guard integration
+              body: 'Engine + store: every illegal (state, verb) pair, refine on trees with each single defect, and the downgrade-then-repair-then-refine loop.'
+              approved_content_hash: 29463cb17910e849d5a55f97adeba148ff8bd6be105cfd1e189c02b334c42120
+              approved_parent_hash: c6e7ab1cf264ea754864a4762e65901e636000fb0e7862b24d45ab3a881e7fca
+        - id: AT-5
+          kind: acceptance_test
+          title: Gate acceptance
+          body: 'Through MCP against a live server: run refine on an empty story asserting the exhaustive problem list, complete the tree stepwise re-running refine after each repair, and verify via tools/list that no status-setting tool exists — statuses move only through transition. Prune (AC-4) is proven separately through the CLI, the human interface of the product.'
+          covers:
+            - US-5.AC-1
+            - US-5.AC-2
+            - US-5.AC-3
+          approved_content_hash: 5a8ea0980f4f0ecddbef60a3f685ff912a380ac0c23556f1a1c256f75db40b20
+          approved_parent_hash: 1a3e86e43371fa631b3059312af9e445b58f592fe888a857314af990c1fed7dc
+        - id: AT-7
+          kind: acceptance_test
+          title: Prune via CLI acceptance
+          body: 'Drive the real trellis CLI entrypoint: with a project whose story reached done through the full git flow, run the prune command and assert the whole tree is deleted; assert prune is blocked for non-done stories and while an outside node depends on a tree member.'
+          covers:
+            - US-5.AC-4
+          approved_content_hash: d17c5f87795ab6cdcdfb83014b0b896e92b07697254031a6d5486a48d2fbbba9
+          approved_parent_hash: 1a3e86e43371fa631b3059312af9e445b58f592fe888a857314af990c1fed7dc
+    - id: US-6
+      kind: story
+      title: Git flow and test evidence
+      body: As the process owner I want start/finish to orchestrate git directly — feature branch per story, merge only after lint, tests and per-spec test evidence — so that the merge into the base branch is a verdict trellis reaches itself, never a claim the agent makes.
+      status: done
+      acceptance_criteria:
+        - id: US-6.AC-1
+          given: a refined story and a clean worktree
+          when: the agent runs start
+          then: a dedicated worktree on branch feature/US-n is created from the base branch (or the branch is reused) and the story is in_progress; the main worktree is untouched
+        - id: US-6.AC-2
+          given: a missing base branch or a repo where the worktree directory is not git-ignored
+          when: the agent runs start
+          then: start is blocked naming the missing branch or the missing .gitignore entry
+        - id: US-6.AC-3
+          given: an in_progress story on its feature branch
+          when: the agent runs finish
+          then: trellis runs the lint command, runs the test command, parses the JUnit reports and requires for every acceptance/integration/unit test spec at least one non-skipped passing test whose name references the spec id (UT-3 or UT_3, boundary-safe)
+        - id: US-6.AC-4
+          given: missing or empty JUnit reports
+          when: finish verifies evidence
+          then: finish is blocked; an absent report is an error, never an empty pass
+        - id: US-6.AC-5
+          given: all gates green
+          when: finish completes
+          then: the feature branch is merged --no-ff into the base branch via the main worktree, then worktree and branch are removed; on merge conflict the merge is aborted and the main worktree stays clean on base
+      approved_content_hash: fc12b7243af383b8c35ae2ad729069b9056802e71ca25b90f4320dd62a0d6f50
+      children:
+        - id: AS-6
+          kind: arch
+          title: Gitflow by construction
+          body: 'The agent never merges: start and finish own all git side effects via gitops (branch create/checkout, --no-ff merge, abort recovery). Test verdicts come from parsing JUnit XML — language-agnostic — matched to spec ids by boundary-safe name search. Gate commands are project config, editable only via CLI.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: ea56faba36d09934d8e4dc3044c3c9c93a9fe16ea2cdffbae03ffdb2f10acaec
+          approved_parent_hash: fc12b7243af383b8c35ae2ad729069b9056802e71ca25b90f4320dd62a0d6f50
+          children:
+            - id: DD-6
+              kind: detail_design
+              title: JUnit evidence matching
+              body: testreport parses nested testsuites; a test proves spec X-n iff its classname::name matches (?i)boundary X[-_]n non-digit-boundary; failures, errors and skips all count against; zero matching report files is an error.
+              approved_content_hash: b1361532ad36105010da32765adada5e9dd281cb88cad23210430eff7ccfc771
+              approved_parent_hash: ea56faba36d09934d8e4dc3044c3c9c93a9fe16ea2cdffbae03ffdb2f10acaec
+              children:
+                - id: UT-6
+                  kind: unit_test
+                  title: Matcher unit tests
+                  body: Unit-test boundary behaviour (UT-3 vs UT-31), case and separator variants, nested suite collection, and Verify's per-spec problem lines.
+                  approved_content_hash: 19eb8b703768add6e89eb71d85cc2f550d298cce78d25595972e962a520edce2
+                  approved_parent_hash: b1361532ad36105010da32765adada5e9dd281cb88cad23210430eff7ccfc771
+            - id: DD-7
+              kind: detail_design
+              title: Merge orchestration
+              body: gitops.MergeBranch merges a feature branch --no-ff into base via the main worktree (which must be clean and is checked out on base); on conflict the merge is aborted and base stays untouched. WorktreeAdd/WorktreeRemove/DeleteBranch own branch lifecycle; finish removes worktree and branch after the merge.
+              approved_content_hash: 6fa7609ae3da46be4468fc46b15ae529e27e74392680e5ce4ab310d3ec9fe1f2
+              approved_parent_hash: ea56faba36d09934d8e4dc3044c3c9c93a9fe16ea2cdffbae03ffdb2f10acaec
+              children:
+                - id: UT-7
+                  kind: unit_test
+                  title: Merge orchestration unit tests
+                  body: 'Unit-test MergeBranch: dirty-main rejection, --no-ff merge commit on base, conflict abort leaving base clean and unmoved, plus worktree/branch cleanup, against a throwaway git repo.'
+                  approved_content_hash: fa25fc0d7b2ec1f23143b8e2e851a627ab98127433b9eac63c10ae4bf9e7f7e0
+                  approved_parent_hash: 6fa7609ae3da46be4468fc46b15ae529e27e74392680e5ce4ab310d3ec9fe1f2
+            - id: IT-6
+              kind: integration_test
+              title: Finish pipeline integration
+              body: 'Engine + real git repo + generated JUnit files: evidence verification wired into finish, merge and branch deletion on success, precise blocking errors otherwise.'
+              approved_content_hash: 8d0d06ead9152533dffafb707dbf40e8790383c2da42b0ed65e184b71f4d957d
+              approved_parent_hash: ea56faba36d09934d8e4dc3044c3c9c93a9fe16ea2cdffbae03ffdb2f10acaec
+        - id: AT-6
+          kind: acceptance_test
+          title: Git flow acceptance
+          body: 'Against a real git repository driven through MCP: start/finish happy path, each blocking condition (dirty worktree, missing base, missing spec evidence, failing/skipped test, absent report). A base branch that advanced after start is blocked by the up-to-date merge gate (US-9) before any merge is attempted; the catch-up path (merge base into feature) then finishes green. Merge-conflict abort recovery remains covered at the gitops unit level as a defensive path.'
+          covers:
+            - US-6.AC-1
+            - US-6.AC-2
+            - US-6.AC-3
+            - US-6.AC-4
+            - US-6.AC-5
+          approved_content_hash: e8a89aac3e001da4085f625f1049c2ad0f8f01465481bd82d4f16b715236aad1
+          approved_parent_hash: fc12b7243af383b8c35ae2ad729069b9056802e71ca25b90f4320dd62a0d6f50
+    - id: US-10
+      kind: story
+      title: Abort transition
+      body: 'As a development agent I want to abandon an in_progress story whose approach turned out wrong: discard the feature branch, return to the base branch, and fall back to refined so the spec survives while the work is dropped.'
+      status: done
+      acceptance_criteria:
+        - id: US-10.AC-1
+          given: an in_progress story with a clean worktree
+          when: the agent runs abort
+          then: the story worktree and the feature branch are removed and the story is refined again; the main worktree is untouched
+        - id: US-10.AC-2
+          given: a dirty story worktree
+          when: the agent runs abort
+          then: 'abort is blocked: commit or stash first — work is never silently destroyed'
+        - id: US-10.AC-3
+          given: a story that is not in_progress
+          when: the agent runs abort
+          then: the transition is rejected naming the required status
+      approved_content_hash: 411d0097da856137ca9ab27c309cd6428c8213eb7f80be60769abde1a85495b1
+      children:
+        - id: AS-10
+          kind: arch
+          title: Fourth verb on the state machine
+          body: 'abort is a transition verb (in_progress -> refined) with git side effects owned by gitops: checkout base, branch -D feature. The spec tree is untouched — refined is re-entered without re-running integrity because nothing about the spec changed.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: dd801ce56a8a019e4eebeb00a63bdaaf43335822889509e5bb8c707b5d57dd0d
+          approved_parent_hash: 411d0097da856137ca9ab27c309cd6428c8213eb7f80be60769abde1a85495b1
+          children:
+            - id: DD-11
+              kind: detail_design
+              title: Worktree discard
+              body: 'core.abort: story worktree must be clean (engine check), then gitops.WorktreeRemove and gitops.DeleteBranch discard it; requireStatus(in_progress) guards the verb.'
+              approved_content_hash: 5322b85c7e67ea2ef2e664bf54794bdcc5cd80de260aaedeab0d143d47838279
+              approved_parent_hash: dd801ce56a8a019e4eebeb00a63bdaaf43335822889509e5bb8c707b5d57dd0d
+              children:
+                - id: UT-11
+                  kind: unit_test
+                  title: Worktree discard unit tests
+                  body: Unit-test WorktreeRemove and DeleteBranch as the abort mechanics incl. error behaviour on missing targets; the dirty guard and status guard are covered by the abort integration test.
+                  approved_content_hash: 1e718efd49eb1dd2a5f540dfecaa905547638a43334ede0cbbe5631efc1c6e74
+                  approved_parent_hash: 5322b85c7e67ea2ef2e664bf54794bdcc5cd80de260aaedeab0d143d47838279
+            - id: IT-10
+              kind: integration_test
+              title: Abort integration
+              body: 'Engine + git repo: the full abort path incl. blocked dirty case, and the restart path creating a fresh branch from base after an abort.'
+              approved_content_hash: 979ede6528d20db613ee7f8f284747ecd0cca61f9a5dde7ff2ea3825f9dcee7b
+              approved_parent_hash: dd801ce56a8a019e4eebeb00a63bdaaf43335822889509e5bb8c707b5d57dd0d
+        - id: AT-12
+          kind: acceptance_test
+          title: Abort acceptance
+          body: 'Through MCP against a real git repository: start a story, commit work in its worktree, dirty the worktree and assert abort is blocked; clean up, abort, assert worktree and branch gone and status refined; assert abort from refined is rejected; assert start afterwards creates a fresh worktree from base.'
+          covers:
+            - US-10.AC-1
+            - US-10.AC-2
+            - US-10.AC-3
+          approved_content_hash: 9d815c1abfb1965920124a3be5460e6924336660456a04fd7de4e221ea89ae90
+          approved_parent_hash: 411d0097da856137ca9ab27c309cd6428c8213eb7f80be60769abde1a85495b1
+    - id: US-11
+      kind: story
+      title: Story sequencing dependencies
+      body: As a planner I want to declare that one story builds on another, so an agent cannot start dependent work before its prerequisite is done.
+      status: done
+      acceptance_criteria:
+        - id: US-11.AC-1
+          given: two stories
+          when: the agent links one story to another as dependency
+          then: a sequencing link is created regardless of the target story's refinement state — sequencing links carry no hash pin
+        - id: US-11.AC-2
+          given: a story whose dependency story is not done
+          when: the agent runs start
+          then: start is blocked naming each unfinished dependency and its current status
+        - id: US-11.AC-3
+          given: all dependency stories done
+          when: the agent runs start with gates green
+          then: start proceeds
+        - id: US-11.AC-4
+          given: a link that would create a cycle among story dependencies
+          when: the agent links it
+          then: the link is rejected naming the cycle
+      approved_content_hash: d2ce943e7a919ba6a17e54327455c31faa2b9fc4396eb59a7c367d64cc9a8c98
+      children:
+        - id: AS-11
+          kind: arch
+          title: Unpinned sequencing edges
+          body: 'Story-to-story links reuse the deps table with an empty pinned hash as the sequencing sentinel: freshness and approval ignore unpinned edges, so a dependency on an evolving story never stales the dependent spec. start walks the story''s sequencing edges and requires every target story to be done. Cycle prevention is a DFS over story-to-story edges at link time.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 70b4dac1f63291e742a7a88221cc1fd256d719cc0668d819942dda72b8168813
+          approved_parent_hash: d2ce943e7a919ba6a17e54327455c31faa2b9fc4396eb59a7c367d64cc9a8c98
+          children:
+            - id: DD-12
+              kind: detail_design
+              title: Sequencing link semantics
+              body: 'core: LinkDep detects story->story and skips the target-fresh guard, storing pinned_hash=''''; freshness and Approve skip empty pins; start guard lists unfinished dependencies; linkWouldCycle does DFS over story edges.'
+              approved_content_hash: 903648dafb92fd099b9a91e7e7397645b54b7be9ddd9e4d746a21a61956b33f0
+              approved_parent_hash: 70b4dac1f63291e742a7a88221cc1fd256d719cc0668d819942dda72b8168813
+              children:
+                - id: UT-12
+                  kind: unit_test
+                  title: Sequencing unit tests
+                  body: 'Unit-test the sentinel semantics: no freshness coupling, approve without dep_hashes for sequencing links, start guard message per dependency, cycle detection on direct and transitive cycles.'
+                  approved_content_hash: c58b72ed0bc8785ed6790bfac5746e5f0a2d6348f9cfb6e3ec47c82c12cd586c
+                  approved_parent_hash: 903648dafb92fd099b9a91e7e7397645b54b7be9ddd9e4d746a21a61956b33f0
+            - id: IT-11
+              kind: integration_test
+              title: Sequencing integration
+              body: 'Engine + store + git repo: unpinned link creation in any target state, start blocked with per-dependency lines, unblocked after the dependency finishes, cycle rejection across a three-story chain.'
+              approved_content_hash: c9388d43d656d434cc44c0d5d09882f5c74c2a9fbd8df4ee73b95d5a7a5c3650
+              approved_parent_hash: 70b4dac1f63291e742a7a88221cc1fd256d719cc0668d819942dda72b8168813
+        - id: AT-13
+          kind: acceptance_test
+          title: Sequencing acceptance
+          body: 'Through MCP: link story B to depend on story A while A is still todo (must work), assert start(B) is blocked naming A and its status, drive A to done via the git flow, assert start(B) proceeds; assert linking A back onto B is rejected as a cycle.'
+          covers:
+            - US-11.AC-1
+            - US-11.AC-2
+            - US-11.AC-3
+            - US-11.AC-4
+          approved_content_hash: 6ea1b2ae07d118d300801201121cd07796086123683dc979c3cefded31fc356c
+          approved_parent_hash: d2ce943e7a919ba6a17e54327455c31faa2b9fc4396eb59a7c367d64cc9a8c98
+    - id: US-12
+      kind: story
+      title: Spec search
+      body: 'As a development agent I need to find the specs that touch my task without reading everything: full-text search over the spec database, plus a complete story-title overview as the product map.'
+      status: done
+      acceptance_criteria:
+        - id: US-12.AC-1
+          given: a populated spec database
+          when: the agent calls search_specs with a query
+          then: nodes matching every query term in title, body or acceptance-criterion text (case-insensitive, tokenized) are returned with id, kind, owning story, title and a matching snippet, ranked by relevance
+        - id: US-12.AC-2
+          given: a query matching nothing
+          when: the agent calls search_specs
+          then: the result is an empty list, not an error
+        - id: US-12.AC-3
+          given: any project state
+          when: the agent calls get_overview
+          then: every story title and every cross-cutting title is listed — the overview is the complete product map
+      approved_content_hash: d83c9cf6c178e9ea93bd3d61aa2b44353e25334f97bb7819871186a0230d23f1
+      children:
+        - id: AS-12
+          kind: arch
+          title: FTS-backed search in the engine
+          body: 'search runs on the FTS5 index (US-19): tokenized terms with AND semantics, last term as word prefix, BM25 ranking, FTS snippets. AC text is folded into the story''s index row, so criterion matches surface the story. The engine resolves the owning story per hit; the tool surface stays one call.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: e69b389a06e6e3bdce6ebf17e9f4e54293e5278eceb74391de03ca20120f46a8
+          approved_parent_hash: d83c9cf6c178e9ea93bd3d61aa2b44353e25334f97bb7819871186a0230d23f1
+          children:
+            - id: DD-13
+              kind: detail_design
+              title: Search delegation to the FTS index
+              body: core.Search delegates to store.SearchFTS and resolves each hit's owning story; hits arrive deduplicated (one index row per node) and ranked. Query construction and index maintenance live in the store (see US-19 DD-20).
+              approved_content_hash: cdf4529e5b6507f60be19bc872a6581e1d2ca22fd615a9ff5691e6ac93f402ce
+              approved_parent_hash: e69b389a06e6e3bdce6ebf17e9f4e54293e5278eceb74391de03ca20120f46a8
+              children:
+                - id: UT-13
+                  kind: unit_test
+                  title: Search behaviour unit tests
+                  body: 'Unit-test the search surface: punctuation-heavy and operator-carrying queries treated literally and error-free, one hit per node, empty-query and no-match behaviour. Query-builder internals are covered by US-19 UT-20.'
+                  approved_content_hash: 7d94d8739e026f438c5581b6686286dcc23ddb1d135ac8f85203f470371e7535
+                  approved_parent_hash: cdf4529e5b6507f60be19bc872a6581e1d2ca22fd615a9ff5691e6ac93f402ce
+            - id: IT-12
+              kind: integration_test
+              title: Search integration
+              body: 'Engine + store: matches across node fields and AC fields, case-insensitivity, dedup when several fields match, owning-story resolution for deep nodes.'
+              approved_content_hash: d690560f9d4976cc78d77aca914a014d2a2fc08c5224bd2303efe090eca785fd
+              approved_parent_hash: e69b389a06e6e3bdce6ebf17e9f4e54293e5278eceb74391de03ca20120f46a8
+        - id: AT-14
+          kind: acceptance_test
+          title: Search acceptance
+          body: 'Through MCP: seed several stories and cross-cutting specs, search by a word occurring only in a body, only in an AC, and mixed-case; assert hits carry id/kind/story/snippet; assert an unmatched query returns empty; assert get_overview lists every story and cross-cutting title. Term/ranking/prefix semantics are proven by US-19''s AT-23.'
+          covers:
+            - US-12.AC-1
+            - US-12.AC-2
+            - US-12.AC-3
+          approved_content_hash: 06841a57498a9d606f97d9f5f142ec0f5d11ae0f85b87ae7b02e640a182bcd41
+          approved_parent_hash: d83c9cf6c178e9ea93bd3d61aa2b44353e25334f97bb7819871186a0230d23f1
+    - id: US-13
+      kind: story
+      title: Spec-to-code paths
+      body: As a development agent I want stories to declare which files or folders realize them, so specs point into the code, finish verifies the pointers, and a changed file leads back to its stories.
+      status: done
+      acceptance_criteria:
+        - id: US-13.AC-1
+          given: a story
+          when: the agent sets a list of repo-relative paths on it
+          then: the paths are stored as metadata (not part of the content hash), visible in the node report and the tree
+        - id: US-13.AC-2
+          given: a story declaring a path that does not exist in the repo
+          when: the agent runs finish
+          then: finish is blocked naming every missing path
+        - id: US-13.AC-3
+          given: a file path
+          when: the agent calls specs_for_path
+          then: all stories whose declared paths equal the path or are a folder prefix of it are returned
+        - id: US-13.AC-4
+          given: a file path
+          when: the human runs trellis affected <path>
+          then: the same stories are printed on the CLI
+      approved_content_hash: b5a3a4060f33f64dfd52a44533969ec0f519fb877018d542b44c126c9368a15f
+      children:
+        - id: AS-13
+          kind: arch
+          title: Paths as unhashed story metadata
+          body: 'Paths live in their own column on story nodes, excluded from the content hash: pointer maintenance must not invalidate approvals. finish gains an existence gate over the declared paths; reverse lookup matches exact paths and folder prefixes. Both directions run through the engine so MCP and CLI share one implementation.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: f20ef29416f977b0e7e62b7224a794a5c41438d5829789fe9e0d6ec28088dfa2
+          approved_parent_hash: b5a3a4060f33f64dfd52a44533969ec0f519fb877018d542b44c126c9368a15f
+          children:
+            - id: DD-14
+              kind: detail_design
+              title: Path storage and matching
+              body: 'store: paths column (JSON) on nodes; core: SetPaths validates story kind and cleans entries, finish checks os.Stat per path, StoriesForPath matches exact or prefix-with-separator.'
+              approved_content_hash: 7b2f9ba97cb36236afdde936b9caacc4eb36ad14b5f8023086a63a678d4652c3
+              approved_parent_hash: f20ef29416f977b0e7e62b7224a794a5c41438d5829789fe9e0d6ec28088dfa2
+              children:
+                - id: UT-14
+                  kind: unit_test
+                  title: Path matching unit tests
+                  body: Unit-test path cleaning, exact and folder-prefix matching incl. the foo vs foobar boundary, and the hash stability of SetPaths.
+                  approved_content_hash: e6f1c26d070e156a65430b91424667bfaff2c024530c00d6f0701dd52ac92980
+                  approved_parent_hash: 7b2f9ba97cb36236afdde936b9caacc4eb36ad14b5f8023086a63a678d4652c3
+            - id: IT-13
+              kind: integration_test
+              title: Path pointer integration
+              body: 'Engine + store + git repo: set/replace/clear paths without touching hashes or approvals, finish blocked on each missing path, reverse lookup for exact file, nested file and non-match.'
+              approved_content_hash: 35c8781bfa0020e32ef9c45b9b2c3679b3aa145825b3b1497cee9fc538d1f1e9
+              approved_parent_hash: f20ef29416f977b0e7e62b7224a794a5c41438d5829789fe9e0d6ec28088dfa2
+        - id: AT-15
+          kind: acceptance_test
+          title: Path pointer acceptance
+          body: 'Through MCP with a git-backed project: set paths on a story, read them back from get_node and get_tree, run finish with a missing path asserting the block, fix the path, finish green, then resolve a file inside a declared folder via specs_for_path.'
+          covers:
+            - US-13.AC-1
+            - US-13.AC-2
+            - US-13.AC-3
+          approved_content_hash: 125e72a1b06ee99a6e7a5198d648e568f567948fcc07960b6115e1b87ce002c3
+          approved_parent_hash: b5a3a4060f33f64dfd52a44533969ec0f519fb877018d542b44c126c9368a15f
+        - id: AT-16
+          kind: acceptance_test
+          title: Affected CLI acceptance
+          body: 'Drive the real CLI entrypoint: trellis affected <path> prints the stories declaring the file or a parent folder, and prints nothing for an undeclared path.'
+          covers:
+            - US-13.AC-4
+          approved_content_hash: 9f0147303278a6d19a3849d805fb2cb8a406ecdf0344d54cb8c8819eae84687a
+          approved_parent_hash: b5a3a4060f33f64dfd52a44533969ec0f519fb877018d542b44c126c9368a15f
+    - id: US-14
+      kind: story
+      title: Test evidence on record
+      body: As the process owner I want finish to record which tests proved each spec, and reports to show it, so hollow or gamed evidence is visible to anyone who looks.
+      status: done
+      acceptance_criteria:
+        - id: US-14.AC-1
+          given: a finish run that passes
+          when: evidence is evaluated
+          then: for every test spec the matching test names and their outcome are recorded with a timestamp, replacing earlier evidence
+        - id: US-14.AC-2
+          given: a test spec with recorded evidence
+          when: the agent calls get_node
+          then: 'the last evidence is shown: proving tests and when they ran'
+        - id: US-14.AC-3
+          given: a story tree
+          when: the agent calls get_tree
+          then: every test spec carries its evidence summary, so missing or thin evidence stands out
+      approved_content_hash: 0522bc2e358bea7a5348abb36cab6cf4fb04588e1893f3e39ccafdb0c7cbf330
+      children:
+        - id: AS-14
+          kind: arch
+          title: Latest evidence, no history
+          body: finish stores the matched cases per test spec in an evidence table keyed by node id — newest run replaces older rows (living context, no archive). Reporting joins evidence into node and tree reports. The event log keeps being the flight recorder; evidence is current state.
+          depends_on:
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: e7e112b388d9719bb40f45c3e6b900e8e1c79115ac190e7a899826ce450c8e48
+          approved_parent_hash: 0522bc2e358bea7a5348abb36cab6cf4fb04588e1893f3e39ccafdb0c7cbf330
+          children:
+            - id: DD-15
+              kind: detail_design
+              title: Evidence table and reporting
+              body: 'store: evidence(node_id, tests JSON, recorded_at) upsert per node; core: finish records after verification, NodeReport/TreeNode gain evidence fields.'
+              approved_content_hash: 1b5eb9941465a3e01147324b2a36037896713b637e4289e20621044ce899b931
+              approved_parent_hash: e7e112b388d9719bb40f45c3e6b900e8e1c79115ac190e7a899826ce450c8e48
+              children:
+                - id: UT-15
+                  kind: unit_test
+                  title: Evidence unit tests
+                  body: Unit-test upsert-replacement, report rendering with and without evidence, and that only test-spec kinds ever receive evidence.
+                  approved_content_hash: e79bbdc6811d5b4d780ba452ed379ed3266d5f98c46b42d23c43075cf2a25a0b
+                  approved_parent_hash: 1b5eb9941465a3e01147324b2a36037896713b637e4289e20621044ce899b931
+            - id: IT-14
+              kind: integration_test
+              title: Evidence integration
+              body: 'Engine + store + git repo: finish writes evidence rows for exactly the tree''s test specs, a second finish of another story leaves them untouched, re-runs replace rows, node and tree reports render them.'
+              approved_content_hash: 241cae402ffae8f6e7709475a6bdfb48c4aff05202b347382bd68804d54a28b4
+              approved_parent_hash: e7e112b388d9719bb40f45c3e6b900e8e1c79115ac190e7a899826ce450c8e48
+        - id: AT-17
+          kind: acceptance_test
+          title: Evidence acceptance
+          body: 'Through MCP with the full git flow: finish a story, then assert get_node on each test spec lists the exact proving test names with a timestamp, and get_tree carries the per-spec evidence summaries.'
+          covers:
+            - US-14.AC-1
+            - US-14.AC-2
+            - US-14.AC-3
+          approved_content_hash: efcc8631eabdd350f4c5deec6d9c973810b62b3ee2010c820ca19d7717c08024
+          approved_parent_hash: 0522bc2e358bea7a5348abb36cab6cf4fb04588e1893f3e39ccafdb0c7cbf330
+    - id: US-15
+      kind: story
+      title: Board export
+      body: As a human I want a single self-contained HTML board of the whole spec database — stories, criteria, trees, freshness, cross-cutting specs and test evidence — generated by the CLI.
+      status: done
+      acceptance_criteria:
+        - id: US-15.AC-1
+          given: a populated project
+          when: the human runs trellis board <project> [-o file]
+          then: a self-contained HTML file is written (default trellis-board.html) showing every story with status, its acceptance criteria with coverage, the spec tree with freshness markers and dependencies, cross-cutting specs, and per-spec test evidence
+        - id: US-15.AC-2
+          given: a viewer in light or dark mode
+          when: the board is opened
+          then: both themes render legibly via CSS tokens; no external resources except fonts
+      approved_content_hash: 84d531a73720f25b7105e447bb9a13ae48b88f0c2d6e55e6a9a6d13ee42fd4a3
+      children:
+        - id: AS-15
+          kind: arch
+          title: Board renders engine reports
+          body: A new internal/board package renders html/template over the same Overview/Tree/Node reports the MCP tools serve — no second data path. The CLI writes the file; styling is embedded, token-based for both themes.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: 1d52a522d870c1a6a5c821961cbd0a5dd1a4bf5725e01fb91a3fd1b383ea6cb3
+          approved_parent_hash: 84d531a73720f25b7105e447bb9a13ae48b88f0c2d6e55e6a9a6d13ee42fd4a3
+          children:
+            - id: DD-16
+              kind: detail_design
+              title: Board template
+              body: 'internal/board: Render(engine) (string, error); template with token CSS (light root, prefers-color-scheme dark guarded, data-theme overrides); CLI subcommand board with -o flag.'
+              approved_content_hash: 94c1f234643f93c5a9a62d3a71f833f9185baff47279b92563652e4f2b152c9d
+              approved_parent_hash: 1d52a522d870c1a6a5c821961cbd0a5dd1a4bf5725e01fb91a3fd1b383ea6cb3
+              children:
+                - id: UT-16
+                  kind: unit_test
+                  title: Board unit tests
+                  body: Unit-test HTML escaping of spec content, empty-project rendering, and evidence/stale marker rendering.
+                  approved_content_hash: 51a7c8942d920cd2486461fda41778f4237803c815b9350ce252b4b8da09b1db
+                  approved_parent_hash: 94c1f234643f93c5a9a62d3a71f833f9185baff47279b92563652e4f2b152c9d
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestBoardUnit_UT_16
+                    recorded_at: "2026-08-30T08:59:16Z"
+            - id: IT-15
+              kind: integration_test
+              title: Board integration
+              body: 'Engine + store: render a project with stale nodes, dependencies and evidence; assert structural completeness of the HTML (every node id exactly once in its tree section).'
+              approved_content_hash: 1c108408489e5647e2d40a829bed2edeb106b99ca51056c9a06bd078ad041b68
+              approved_parent_hash: 1d52a522d870c1a6a5c821961cbd0a5dd1a4bf5725e01fb91a3fd1b383ea6cb3
+              evidence:
+                tests:
+                    - trellis/internal/board::TestBoardIntegration_IT_15
+                recorded_at: "2026-08-30T08:59:16Z"
+        - id: AT-18
+          kind: acceptance_test
+          title: Board acceptance
+          body: 'Drive the real CLI entrypoint on a populated project incl. a done story with evidence: run trellis board, parse the emitted HTML and assert story ids, status labels, AC coverage, stale markers, dependency references and evidence strings are present; assert the light and dark token blocks exist.'
+          covers:
+            - US-15.AC-1
+            - US-15.AC-2
+          approved_content_hash: 6b1812b59982b61feb0d7f80d1e48806d7cef00142e059ac4d5943eaf84e1e07
+          approved_parent_hash: 84d531a73720f25b7105e447bb9a13ae48b88f0c2d6e55e6a9a6d13ee42fd4a3
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestBoardCLIAcceptance_AT_18
+            recorded_at: "2026-08-30T08:59:16Z"
+    - id: US-16
+      kind: story
+      title: Init scaffolding and git hooks
+      body: 'As a human I want trellis init to wire the repo completely: MCP registration, agent instructions, and git hooks that enforce lint before commit and tests before push as the second defense line.'
+      status: done
+      acceptance_criteria:
+        - id: US-16.AC-1
+          given: a repo without trellis wiring
+          when: the human runs trellis init
+          then: .mcp.json with the serve entry and an AGENTS.md trellis section are created; existing files are left untouched and reported
+        - id: US-16.AC-2
+          given: a repo with a git directory
+          when: the human runs trellis init
+          then: pre-commit and pre-push hooks are installed that run trellis gate lint / trellis gate test; existing hooks are not overwritten and reported
+        - id: US-16.AC-3
+          given: a project with configured commands
+          when: a hook runs trellis gate lint or test
+          then: the configured command runs in the repo and its exit code decides; an unconfigured gate passes with a notice
+      approved_content_hash: c3929bffa188bf73f09f4970d57e2c8bb4e20219e8cddb29e7a3d66def19d2c9
+      children:
+        - id: AS-16
+          kind: arch
+          title: Scaffold at init, gate at runtime
+          body: init writes the wiring files idempotently (create-if-absent, never overwrite). Hooks delegate to trellis gate <lint|test> --project id, which reads the CURRENT config at run time — reconfiguration needs no hook reinstall. finish stays the authority; hooks are the early warning.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+          approved_parent_hash: c3929bffa188bf73f09f4970d57e2c8bb4e20219e8cddb29e7a3d66def19d2c9
+          children:
+            - id: DD-17
+              kind: detail_design
+              title: Scaffold writer and gate command
+              body: 'cmd/trellis: scaffold(repo, id) writing .mcp.json/AGENTS.md/hook files with 0755 hooks; gate subcommand resolving the project, running the configured command via sh -c in the repo.'
+              approved_content_hash: 2dd889f76d68c5a71a72406e3d87ffa644b615eb1351c2f279781346e1364279
+              approved_parent_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+              children:
+                - id: UT-17
+                  kind: unit_test
+                  title: Scaffold unit tests
+                  body: Unit-test create-if-absent behaviour, hook file content and mode, and gate's three outcomes.
+                  approved_content_hash: 608f95cd0c6b920b1065e77f4300c0eaa8c0668b2ca1ef36fd6b59375490100c
+                  approved_parent_hash: 2dd889f76d68c5a71a72406e3d87ffa644b615eb1351c2f279781346e1364279
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestScaffoldUnit_UT_17
+                    recorded_at: "2026-08-30T09:00:41Z"
+            - id: IT-16
+              kind: integration_test
+              title: Scaffold integration
+              body: 'Engine/store + temp repo: file creation matrix (absent/present), hook executability, gate exit codes for green, red and unconfigured commands.'
+              approved_content_hash: 41e70672a16d5607fba49827142fd41e32c52fcbb91d29b0bd77924bce62b345
+              approved_parent_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestScaffoldIntegration_IT_16
+                recorded_at: "2026-08-30T09:00:41Z"
+        - id: AT-19
+          kind: acceptance_test
+          title: Scaffold acceptance
+          body: 'Drive the real CLI entrypoint in a temp git repo: init creates .mcp.json, AGENTS.md section and both hooks; a second init in a repo with pre-existing files reports and preserves them; trellis gate lint fails on a failing configured command, passes on a green one and passes with a notice when unconfigured.'
+          covers:
+            - US-16.AC-1
+            - US-16.AC-2
+            - US-16.AC-3
+          approved_content_hash: c4300b306a3638085ec9dc460596e3b756b449a87037cd0113301698a672afb5
+          approved_parent_hash: c3929bffa188bf73f09f4970d57e2c8bb4e20219e8cddb29e7a3d66def19d2c9
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestScaffoldAcceptance_AT_19
+            recorded_at: "2026-08-30T09:00:41Z"
+    - id: US-8
+      kind: story
+      title: Done trees are living context
+      body: 'As the process owner I want done spec trees to stay editable so the context source tracks reality: corrections happen in place, honesty comes from stale markers and explicit re-approval, and done stories are never reopened automatically.'
+      status: done
+      acceptance_criteria:
+        - id: US-8.AC-1
+          given: a done story
+          when: the agent creates, updates or deletes nodes or acceptance criteria in its tree
+          then: the operation succeeds and freshness markers flag every unreviewed change
+        - id: US-8.AC-2
+          given: an edit anywhere in a done tree
+          when: automatic downgrade evaluates affected stories
+          then: the done story keeps status done — reopening is never automatic
+        - id: US-8.AC-3
+          given: a stale node in a done tree
+          when: it is re-approved with current content and dependency hashes
+          then: the stale markers clear
+      approved_content_hash: 394b91d71a5b01f57ddcb3e01f6eb22d88f7ed8dda7901dfe71eac7c17575ab1
+      children:
+        - id: AS-8
+          kind: arch
+          title: No content locks, ever
+          body: 'The engine mutation path carries no done-status guard: structural rules and hash bookkeeping are the only content gates. Done status gates transitions exclusively. downgradeAffected keeps skipping done stories; approval works identically on done trees, which is how stale markers are cleared.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: a9a83dd3a8f4a585ef949fd196c112b3252ef32a1c37bf24b3cdc98aa36886c4
+          approved_parent_hash: 394b91d71a5b01f57ddcb3e01f6eb22d88f7ed8dda7901dfe71eac7c17575ab1
+          children:
+            - id: DD-9
+              kind: detail_design
+              title: Transition-only done semantics
+              body: 'core: no guardDoneTree anywhere in CreateNode/UpdateNode/DeleteNode/AC ops/LinkDep; Transition verbs remain the only readers of the done status besides reporting.'
+              approved_content_hash: 08680e2c2ec2c6b7cef1ad9d5a33f9c399aed26e358b7d6e082cea49d868fae3
+              approved_parent_hash: a9a83dd3a8f4a585ef949fd196c112b3252ef32a1c37bf24b3cdc98aa36886c4
+              children:
+                - id: UT-9
+                  kind: unit_test
+                  title: Done mutability unit tests
+                  body: Unit-test each mutation op succeeding against a done story (store-level status setup, in-memory store), downgrade skipping done, and re-approval clearing staleness.
+                  approved_content_hash: bc4585fcdfebd13d36a8d866e2e9ef275ee83e293e951ed056c6a4d3486c23b2
+                  approved_parent_hash: 08680e2c2ec2c6b7cef1ad9d5a33f9c399aed26e358b7d6e082cea49d868fae3
+            - id: IT-8
+              kind: integration_test
+              title: Living done tree integration
+              body: 'Engine + store + git repo: drive a story to done, run every mutation path (node create/update/delete, AC add/update/delete, dependency link) asserting success, stale propagation, status stability, and marker clearance after re-approval.'
+              approved_content_hash: b466282be986056c273e506c292f8b1de6bed76af8ef91095cdadbf6e8319ed7
+              approved_parent_hash: a9a83dd3a8f4a585ef949fd196c112b3252ef32a1c37bf24b3cdc98aa36886c4
+        - id: AT-10
+          kind: acceptance_test
+          title: Living done tree acceptance
+          body: 'Through MCP with a story driven to done via the full git flow: edit a mid-tree node and an AC, assert both succeed, status stays done and get_tree shows stale markers; create and delete a node in the done tree; re-approve the stale chain and assert the markers clear.'
+          covers:
+            - US-8.AC-1
+            - US-8.AC-2
+            - US-8.AC-3
+          approved_content_hash: 9b6c679db48f5551799da6f4e046f53b79b14640ac086fa7437cb4f1e4f0494d
+          approved_parent_hash: 394b91d71a5b01f57ddcb3e01f6eb22d88f7ed8dda7901dfe71eac7c17575ab1
+    - id: US-9
+      kind: story
+      title: 'Merge gate: test what will merge'
+      body: As the process owner I want finish to reject a feature branch that is behind the base branch, so the tests that gate the merge always ran on the exact content that lands in the base.
+      status: done
+      acceptance_criteria:
+        - id: US-9.AC-1
+          given: a base branch that advanced since the feature branch was created
+          when: the agent runs finish
+          then: finish is blocked telling the agent to merge or rebase the base branch into the feature branch first
+        - id: US-9.AC-2
+          given: a feature branch that contains the base branch tip
+          when: the agent runs finish with all gates green
+          then: the merge proceeds
+      approved_content_hash: dae3b8d51c4ff77340f2d261f67794ba291ed374ef0a7ff663e88030158d1ee2
+      children:
+        - id: AS-9
+          kind: arch
+          title: Ancestor check before the gates
+          body: finish verifies that the base branch tip is an ancestor of the feature branch head (git merge-base --is-ancestor) before running lint and tests — everything after the check therefore exercises the future merge result.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: e64290b125d63c3b4c74926b3c0811df4e4f2715663b247bdd52fc9465063af8
+          approved_parent_hash: dae3b8d51c4ff77340f2d261f67794ba291ed374ef0a7ff663e88030158d1ee2
+          children:
+            - id: DD-10
+              kind: detail_design
+              title: gitops.IsAncestor
+              body: 'gitops: IsAncestor(ancestor, descendant) via merge-base --is-ancestor; finish calls it with (base, feature) right after the branch/cleanliness checks.'
+              approved_content_hash: 39c514a24166d5405b924d84b6f5ed85eb7d13fdb7403773cf0e6dabe9da8eda
+              approved_parent_hash: e64290b125d63c3b4c74926b3c0811df4e4f2715663b247bdd52fc9465063af8
+              children:
+                - id: UT-10
+                  kind: unit_test
+                  title: Ancestor check unit tests
+                  body: Unit-test IsAncestor on diverged, fast-forwardable and up-to-date branch pairs in a throwaway repo. The finish error text for a behind branch is asserted by the merge gate integration test.
+                  approved_content_hash: ce1caa80d5dea6fb34274250a761c1a5313c6c9cc5b8bb7f7e266a30cf882d0b
+                  approved_parent_hash: 39c514a24166d5405b924d84b6f5ed85eb7d13fdb7403773cf0e6dabe9da8eda
+            - id: IT-9
+              kind: integration_test
+              title: Merge gate integration
+              body: 'Engine + git repo: base advanced -> finish blocked naming both branches; after merging base into feature the same finish call passes and merges --no-ff.'
+              approved_content_hash: e014451efec96d3bfded109880e76c749f24b84d1b87f683b3ede31d80d7e8a1
+              approved_parent_hash: e64290b125d63c3b4c74926b3c0811df4e4f2715663b247bdd52fc9465063af8
+        - id: AT-11
+          kind: acceptance_test
+          title: Up-to-date merge gate acceptance
+          body: 'Through MCP against a real git repository: start a story, advance the base branch with an unrelated commit, assert finish is blocked with the catch-up instruction; merge the base into the feature branch, assert finish then succeeds.'
+          covers:
+            - US-9.AC-1
+            - US-9.AC-2
+          approved_content_hash: ab72c070d70e4236444a49f25efab24957e273f3c538c4333d9d18872033f31d
+          approved_parent_hash: dae3b8d51c4ff77340f2d261f67794ba291ed374ef0a7ff663e88030158d1ee2
+    - id: US-17
+      kind: story
+      title: Worktree isolation
+      body: As the process owner I want every in_progress story to live in its own git worktree so parallel stories cannot pull branches out from under each other, the main worktree stays parked on the base branch, and direct commits on the base branch are blocked.
+      status: done
+      acceptance_criteria:
+        - id: US-17.AC-1
+          given: a refined story
+          when: the agent runs start
+          then: a dedicated worktree is created at .trellis-worktrees/<story> on branch feature/<story> from base (reusing the branch if it exists), the main worktree is untouched, and the reported message names the worktree path where all work must happen
+        - id: US-17.AC-2
+          given: one story already in_progress
+          when: the agent starts a second story
+          then: the second start succeeds with its own worktree — stories are parallel by construction
+        - id: US-17.AC-3
+          given: an in_progress story
+          when: the agent runs finish
+          then: the gates (up-to-date check, lint, tests, evidence, paths) run inside the story worktree; the merge happens via the main worktree on the base branch; worktree and branch are removed afterwards
+        - id: US-17.AC-4
+          given: an in_progress story
+          when: the agent runs abort
+          then: the story worktree must be clean, then worktree and branch are removed and the story is refined again
+        - id: US-17.AC-5
+          given: a repo where .trellis-worktrees is not git-ignored
+          when: the agent runs start
+          then: start is blocked telling the human to add .trellis-worktrees/ to .gitignore
+        - id: US-17.AC-6
+          given: the pre-commit hook installed
+          when: someone commits while the current branch is the base branch
+          then: 'the commit is blocked: work happens in story worktrees, the base branch only receives trellis merges'
+      approved_content_hash: 751299f19f84a8f953c086f9710888651d818f1a459671dfb59c4e608a3c67cc
+      children:
+        - id: AS-17
+          kind: arch
+          title: One worktree per story, main worktree parked on base
+          body: start/finish/abort own all worktree lifecycle via gitops (worktree add/remove, branch reuse). Story worktrees live under .trellis-worktrees/ inside the repo and must be git-ignored (checked with git check-ignore at start). Gates execute with the story worktree as working directory; only the merge touches the main worktree, which is expected to sit on the base branch. The branch gate (trellis gate branch) rejects commits on the base branch and is part of the scaffolded pre-commit hook; trellis merges are unaffected because git merge does not run pre-commit.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: ea21ba1a1e2c2fad06b83c0677ca95321b9fd8169d2b23ec31f5df8817f43cfa
+          approved_parent_hash: 751299f19f84a8f953c086f9710888651d818f1a459671dfb59c4e608a3c67cc
+          children:
+            - id: DD-18
+              kind: detail_design
+              title: gitops worktree operations
+              body: 'gitops: WorktreeAdd(path, branch, base) with branch reuse, WorktreeRemove(path), IsIgnored(path); engine derives worktreePath(story) and threads it through start/finish/abort; finish merges via the main worktree after checking out base there.'
+              approved_content_hash: 21eaeb92a8e696bb6e36601885ff7d622d931504c93001781913211ba0ffe1d4
+              approved_parent_hash: ea21ba1a1e2c2fad06b83c0677ca95321b9fd8169d2b23ec31f5df8817f43cfa
+              children:
+                - id: UT-18
+                  kind: unit_test
+                  title: Worktree unit tests
+                  body: Unit-test WorktreeAdd create/reuse, WorktreeRemove, IsIgnored, and the branch gate verdicts on base vs feature branches.
+                  approved_content_hash: 451f7d8f4207e171ce8ce1904fc6af224ceead3e73dcaefce4302da03f152bdd
+                  approved_parent_hash: 21eaeb92a8e696bb6e36601885ff7d622d931504c93001781913211ba0ffe1d4
+                  evidence:
+                    tests:
+                        - trellis/internal/gitops::TestWorktreeOps_UT_18
+                    recorded_at: "2026-08-30T09:26:39Z"
+            - id: IT-17
+              kind: integration_test
+              title: Worktree lifecycle integration
+              body: 'Engine + real git repo: parallel starts, gates-in-worktree finish incl. failure cases (dirty story worktree, dirty main worktree, behind base), abort cleanup, branch reuse after abort-restart, ignore-guard rejection.'
+              approved_content_hash: e45081a3b6eccf07e46371c875f0808c45b63ea5388ff77d661d62286bf369cc
+              approved_parent_hash: ea21ba1a1e2c2fad06b83c0677ca95321b9fd8169d2b23ec31f5df8817f43cfa
+              evidence:
+                tests:
+                    - trellis/internal/core::TestWorktreeLifecycleIntegration_IT_17
+                recorded_at: "2026-08-30T09:26:39Z"
+        - id: AT-20
+          kind: acceptance_test
+          title: Worktree acceptance
+          body: 'Through MCP against a real git repository: start two stories in parallel asserting two worktrees and an untouched main worktree; finish one story asserting gates ran in its worktree, the merge landed on base and worktree+branch are gone; abort the other asserting cleanup; assert the ignore guard blocks start in a repo without the .gitignore entry.'
+          covers:
+            - US-17.AC-1
+            - US-17.AC-2
+            - US-17.AC-3
+            - US-17.AC-4
+            - US-17.AC-5
+          approved_content_hash: e251519ea4b40583ddfcbe3b6710b74e9de68cb3a456d091b82d58b291172d0c
+          approved_parent_hash: 751299f19f84a8f953c086f9710888651d818f1a459671dfb59c4e608a3c67cc
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestWorktreeAcceptance_AT_20
+            recorded_at: "2026-08-30T09:26:39Z"
+        - id: AT-21
+          kind: acceptance_test
+          title: Base-branch commit gate acceptance
+          body: 'Drive the real CLI entrypoint: trellis gate branch fails on the base branch and passes on a feature branch; init installs a pre-commit hook that includes the branch gate.'
+          covers:
+            - US-17.AC-6
+          approved_content_hash: a65195fe3f02a94e80e32633d4ef4ceca6a1c035ece910620e1564072627f014
+          approved_parent_hash: 751299f19f84a8f953c086f9710888651d818f1a459671dfb59c4e608a3c67cc
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestBranchGateAcceptance_AT_21
+            recorded_at: "2026-08-30T09:26:39Z"
+    - id: US-18
+      kind: story
+      title: Live board
+      body: As a human I want the board served over HTTP with automatic browser refresh, so the open tab always shows the current spec state without manual regeneration.
+      status: done
+      acceptance_criteria:
+        - id: US-18.AC-1
+          given: a project
+          when: the human runs trellis board <project> --serve
+          then: an HTTP server renders the board fresh from the engine on every request
+        - id: US-18.AC-2
+          given: an open board page
+          when: the spec database changes (any new event)
+          then: the page reloads automatically within about a second via a server-sent-events tick
+        - id: US-18.AC-3
+          given: the static mode
+          when: the human runs trellis board <project> without --serve
+          then: the file export works unchanged
+      approved_content_hash: 599c95733c6e2a4f234f9211a320d4ee88f01d49537f5dba1cf68e5f2ef31bad
+      children:
+        - id: AS-18
+          kind: arch
+          title: Render per request, reload via event-log polling
+          body: GET / renders board.Render fresh — no cache, no second data path. GET /events is an SSE stream; the server polls the event log's max sequence once per second and emits a tick when it grows, which the page's EventSource handler answers with location.reload(). Works across processes because the event log lives in the shared store.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-3
+              pinned_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
+          approved_content_hash: 9e3fc55e850500b51db407806c0b9fefb98b5fcb213690c01b68edd97e277569
+          approved_parent_hash: 599c95733c6e2a4f234f9211a320d4ee88f01d49537f5dba1cf68e5f2ef31bad
+          children:
+            - id: DD-19
+              kind: detail_design
+              title: Board HTTP server
+              body: 'internal/board: Serve(engine, store, addr) with handlers for / and /events; store gains MaxEventSeq(project); the served page embeds a tiny EventSource reload script.'
+              approved_content_hash: 20e195d0c2ebc1929efa72d085e86671621b503c61890afbfa475095b2f2aa57
+              approved_parent_hash: 9e3fc55e850500b51db407806c0b9fefb98b5fcb213690c01b68edd97e277569
+              children:
+                - id: UT-19
+                  kind: unit_test
+                  title: Board server unit tests
+                  body: Unit-test the SSE handler emitting on sequence growth, connection close handling, and that the reload script is absent from static Render output.
+                  approved_content_hash: c94561a00e092ca92966ce58d14a009244ee52586abd2964588f67ac0ac4d8de
+                  approved_parent_hash: 20e195d0c2ebc1929efa72d085e86671621b503c61890afbfa475095b2f2aa57
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestBoardServerUnit_UT_19
+                    recorded_at: "2026-08-30T09:28:47Z"
+            - id: IT-18
+              kind: integration_test
+              title: Live board integration
+              body: 'board server against engine + store via httptest: page renders, seq watcher emits on new events and stays quiet without, reload script is part of served page but not of the static export.'
+              approved_content_hash: a56de081f341a555bad50b0993d10f332fc21b80c8164a0e75e94961e4e202ea
+              approved_parent_hash: 9e3fc55e850500b51db407806c0b9fefb98b5fcb213690c01b68edd97e277569
+              evidence:
+                tests:
+                    - trellis/internal/board::TestLiveBoardIntegration_IT_18
+                recorded_at: "2026-08-30T09:28:47Z"
+        - id: AT-22
+          kind: acceptance_test
+          title: Live board acceptance
+          body: 'Drive the real CLI entrypoint: start the server on an ephemeral port, fetch the page and assert current content, mutate the spec database through the engine, assert the SSE endpoint emits a reload tick and a re-fetch shows the change; assert the static export still works.'
+          covers:
+            - US-18.AC-1
+            - US-18.AC-2
+            - US-18.AC-3
+          approved_content_hash: afa58f1cd37e078278203fbf1264cb9aec39ac70e1aab7f5a0bc277b1721abe6
+          approved_parent_hash: 599c95733c6e2a4f234f9211a320d4ee88f01d49537f5dba1cf68e5f2ef31bad
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestLiveBoardCLIAcceptance_AT_22
+            recorded_at: "2026-08-30T09:28:47Z"
+    - id: US-19
+      kind: story
+      title: FTS5 search
+      body: 'As a development agent I want spec search to be tokenized and ranked so multi-word queries find the right specs first: all terms must match, the last term matches as a prefix, results order by BM25.'
+      status: done
+      acceptance_criteria:
+        - id: US-19.AC-1
+          given: a populated project
+          when: search_specs runs with several terms
+          then: only specs matching every term are returned, ranked by BM25 relevance, with an FTS-generated snippet highlighting the matches
+        - id: US-19.AC-2
+          given: a query typed mid-word
+          when: the last term is incomplete
+          then: it matches as a word prefix, so agents find specs while typing partial identifiers
+        - id: US-19.AC-3
+          given: any node or acceptance-criterion write
+          when: the index is consulted afterwards
+          then: the FTS index reflects the change immediately — created, updated and deleted content is always searchable or gone
+        - id: US-19.AC-4
+          given: a query containing FTS syntax or quotes
+          when: search_specs runs
+          then: the query is treated as literal terms, never as FTS operators, and cannot error
+      approved_content_hash: af59c4593344a19d1612792361611fc9bed03d0b344f6a97d3b9749b462216fc
+      children:
+        - id: AS-19
+          kind: arch
+          title: Contentless-delete FTS5 index beside the tables
+          body: A single fts5 table indexes one row per node (title, body, AC text folded into the story row). The store maintains it inside every write path and rebuilds it on open when it is empty while nodes exist (migration). Queries are built from whitespace-split terms, each double-quoted, the last suffixed with *; ranking is bm25, snippets come from the FTS snippet function. The engine keeps the same SearchHit surface.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: 6fdd8ccdee88e0079cb5843a481b0fe07a72f150920ed77c1483c9521f6480e5
+          approved_parent_hash: af59c4593344a19d1612792361611fc9bed03d0b344f6a97d3b9749b462216fc
+          children:
+            - id: DD-20
+              kind: detail_design
+              title: FTS table and query builder
+              body: 'store: specs_fts virtual table (project_id, node_id unindexed; text); reindexNode composes title+body+ACs; buildFTSQuery quotes terms and adds the prefix star; SearchFTS returns node ids with snippets ordered by bm25.'
+              approved_content_hash: 13209d469bc481b4c259bf88e8a60192da1f4e730f7c81129a4bfc3c858da772
+              approved_parent_hash: 6fdd8ccdee88e0079cb5843a481b0fe07a72f150920ed77c1483c9521f6480e5
+              children:
+                - id: UT-20
+                  kind: unit_test
+                  title: FTS query unit tests
+                  body: Unit-test buildFTSQuery quoting/escaping (operators, quotes, empty terms), prefix behaviour, and reindexNode text composition for stories with ACs.
+                  approved_content_hash: 7b9cf3e45a644064d0ce63520c49cef8558954fb46ed96e1befff7e039cbbec3
+                  approved_parent_hash: 13209d469bc481b4c259bf88e8a60192da1f4e730f7c81129a4bfc3c858da772
+                  evidence:
+                    tests:
+                        - trellis/internal/store::TestFTSQueryBuilder_UT_20
+                    recorded_at: "2026-08-30T09:33:44Z"
+            - id: IT-19
+              kind: integration_test
+              title: FTS index integration
+              body: 'Store + engine: index rebuild on open of a pre-FTS database, write-path maintenance across node and AC operations incl. deletes, ranking order, owning-story resolution unchanged.'
+              approved_content_hash: 3d04aecf3d1578c9ef2ac063072c1f34281a55cbcead1c057b24582de23fd072
+              approved_parent_hash: 6fdd8ccdee88e0079cb5843a481b0fe07a72f150920ed77c1483c9521f6480e5
+              evidence:
+                tests:
+                    - trellis/internal/core::TestSearchRanking_IT_19
+                    - trellis/internal/store::TestFTSIndexIntegration_IT_19
+                recorded_at: "2026-08-30T09:33:44Z"
+        - id: AT-23
+          kind: acceptance_test
+          title: FTS search acceptance
+          body: 'Through MCP: multi-term AND semantics with BM25 ordering asserted on crafted specs, prefix match on the last term, immediate index updates after create/update/delete of nodes and ACs, and hostile queries (quotes, operators, parentheses) returning safe results.'
+          covers:
+            - US-19.AC-1
+            - US-19.AC-2
+            - US-19.AC-3
+            - US-19.AC-4
+          approved_content_hash: 6bff45682c406f95f012d302235969e636a613f84158da12afb676f7b6800b9a
+          approved_parent_hash: af59c4593344a19d1612792361611fc9bed03d0b344f6a97d3b9749b462216fc
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestFTSSearchAcceptance_AT_23
+            recorded_at: "2026-08-30T09:33:44Z"
+    - id: US-20
+      kind: story
+      title: Gates run where the commit happens
+      body: As a development agent I want the pre-commit and pre-push gates to execute in the worktree I am committing from, so the feedback I get reflects my own state, not the main worktree's.
+      status: done
+      acceptance_criteria:
+        - id: US-20.AC-1
+          given: a gate invocation from inside a story worktree of the project repo
+          when: trellis gate lint or test runs
+          then: the configured command executes in that worktree's root, so the verdict reflects the committing worktree
+        - id: US-20.AC-2
+          given: a gate invocation from a directory outside the project repository
+          when: trellis gate lint or test runs
+          then: the command falls back to the project's main repo path
+      approved_content_hash: 8a2a3fb0e850db6e6ca7dba410ebe72420514112305f05cef08b13417a02b687
+      children:
+        - id: AS-20
+          kind: arch
+          title: Gate dir resolution by git context
+          body: 'trellis gate resolves its working directory from the caller''s git context: if the current directory lies in a worktree whose common git dir belongs to the project repo, the command runs in that worktree''s toplevel; otherwise it runs in the configured repo path. The branch gate already operates on the caller''s HEAD and stays unchanged.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 4096d77dd9b7c16c495c1f7b226f2f3d063a4177694df9c4414a2c3dad0f45c5
+          approved_parent_hash: 8a2a3fb0e850db6e6ca7dba410ebe72420514112305f05cef08b13417a02b687
+          children:
+            - id: DD-21
+              kind: detail_design
+              title: resolveGateDir
+              body: 'cmd/trellis: resolveGateDir(repoPath) uses git rev-parse --show-toplevel and --git-common-dir of the cwd; matching common dir selects the cwd toplevel, anything else selects repoPath.'
+              approved_content_hash: 2a4f7a9e943ea56c22b988f25666517900277940c566cb3853f460cc278affff
+              approved_parent_hash: 4096d77dd9b7c16c495c1f7b226f2f3d063a4177694df9c4414a2c3dad0f45c5
+              children:
+                - id: UT-21
+                  kind: unit_test
+                  title: Gate dir unit tests
+                  body: Unit-test resolveGateDir for main worktree, story worktree and foreign directory.
+                  approved_content_hash: a68819e8f4f2c7ed7285d4511f0c57288d598a34dbc253f92881988198227061
+                  approved_parent_hash: 2a4f7a9e943ea56c22b988f25666517900277940c566cb3853f460cc278affff
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestResolveGateDir_UT_21
+                    recorded_at: "2026-08-30T09:45:07Z"
+            - id: IT-20
+              kind: integration_test
+              title: Gate dir integration
+              body: 'CLI + real repo with a worktree: dir resolution for main worktree, story worktree and unrelated cwd, with the gate verdicts proving where the command ran.'
+              approved_content_hash: f4201c81f2ed1c7d936d5e887c2289748e01a27e0f1d17812ecdd7ea157987ce
+              approved_parent_hash: 4096d77dd9b7c16c495c1f7b226f2f3d063a4177694df9c4414a2c3dad0f45c5
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestGateDirIntegration_IT_20
+                recorded_at: "2026-08-30T09:45:07Z"
+        - id: AT-24
+          kind: acceptance_test
+          title: Worktree gate acceptance
+          body: 'Drive the real CLI entrypoint: with a lint command that only succeeds against a marker file present in the story worktree, run gate lint from the worktree (passes) and from the main worktree (fails); run it from an unrelated directory and assert the fallback to the main repo path.'
+          covers:
+            - US-20.AC-1
+            - US-20.AC-2
+          approved_content_hash: 5f5aaec1aec510d6bb799677f197f5fd6a8abe8c988cc4cca633c465f7981cfe
+          approved_parent_hash: 8a2a3fb0e850db6e6ca7dba410ebe72420514112305f05cef08b13417a02b687
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestWorktreeGateAcceptance_AT_24
+            recorded_at: "2026-08-30T09:45:07Z"
+    - id: US-21
+      kind: story
+      title: Project glossary
+      body: As a team I want project terms defined once, ultra-short, and pushed into every surface, so specs and conversation keep one consistent wording.
+      status: done
+      acceptance_criteria:
+        - id: US-21.AC-1
+          given: a project
+          when: the agent defines a term with a definition
+          then: the term is stored; definitions above 240 characters or terms above 64 characters are rejected — glossary entries stay ultra short
+        - id: US-21.AC-2
+          given: an existing term
+          when: the agent defines it again or deletes it
+          then: define updates the definition in place; delete removes it; deleting an unknown term errors
+        - id: US-21.AC-3
+          given: any project state
+          when: the agent calls get_overview
+          then: the complete glossary is listed — it is small by design and always in context
+        - id: US-21.AC-4
+          given: a rendered board
+          when: spec texts contain glossary terms
+          then: the board shows a glossary section and marks term occurrences in bodies and acceptance criteria with hover definitions linking to the glossary entry
+      approved_content_hash: 2d3e1d9aeb52dd095a97115690758f04f5a54fe5fc437bbbb778b89272bd7e87
+      children:
+        - id: AS-21
+          kind: arch
+          title: One table, marked everywhere it renders
+          body: Glossary entries live in their own table (term unique per project, length limits enforced in the engine) — metadata like paths, no approval hashes. The board escapes spec text first, then wraps case-insensitive whole-word term occurrences (longest term first) in anchors with the definition as hover title, linking to the glossary section. The MCP server instructions tell agents to check the glossary and reuse its exact wording.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: 3463a018de83cba1b1de46c7b0ea1fa2f0f025c75cd84c6049e24f53b967f786
+          approved_parent_hash: 2d3e1d9aeb52dd095a97115690758f04f5a54fe5fc437bbbb778b89272bd7e87
+          children:
+            - id: DD-22
+              kind: detail_design
+              title: Glossary storage and term marking
+              body: 'store: glossary table with upsert/delete/list; engine: DefineTerm/DeleteTerm with limits, Overview gains the glossary; board: termify(text) escapes then wraps whole-word matches longest-first as <a class=term href=#gloss-... title=def>, applied to bodies and AC fields.'
+              approved_content_hash: e2b2c8cd8cdfd8dc84b4aab5ad37c0d0fe549317fac7109119fd1d66ca4c2d1a
+              approved_parent_hash: 3463a018de83cba1b1de46c7b0ea1fa2f0f025c75cd84c6049e24f53b967f786
+              children:
+                - id: UT-22
+                  kind: unit_test
+                  title: Termify unit tests
+                  body: Unit-test whole-word and case-insensitive matching, longest-first precedence for overlapping terms, escaping of hostile term names and definitions, and the length limits.
+                  approved_content_hash: 97d51c27d2294a45b99e518b02c590fb9698c0a53c9a9dfbc49ae15e991e93f8
+                  approved_parent_hash: e2b2c8cd8cdfd8dc84b4aab5ad37c0d0fe549317fac7109119fd1d66ca4c2d1a
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestTermify_UT_22
+                    recorded_at: "2026-08-30T09:48:13Z"
+            - id: IT-21
+              kind: integration_test
+              title: Glossary integration
+              body: 'Store + engine + board: define/redefine/delete roundtrip, limit enforcement, overview inclusion, board rendering with marking across story bodies and AC text, and escaping safety for hostile terms and definitions.'
+              approved_content_hash: 60ea95da5620df84839efb69b37cd752ba045f288940a29ffa72053c18d75b34
+              approved_parent_hash: 3463a018de83cba1b1de46c7b0ea1fa2f0f025c75cd84c6049e24f53b967f786
+              evidence:
+                tests:
+                    - trellis/internal/board::TestGlossaryIntegration_IT_21
+                recorded_at: "2026-08-30T09:48:13Z"
+        - id: AT-25
+          kind: acceptance_test
+          title: Glossary acceptance
+          body: 'Through MCP: define terms incl. limit rejections, redefine and delete, assert the glossary in get_overview; render the board via the engine and assert the glossary section plus hover-marked, linked term occurrences inside a spec body and an acceptance criterion.'
+          covers:
+            - US-21.AC-1
+            - US-21.AC-2
+            - US-21.AC-3
+            - US-21.AC-4
+          approved_content_hash: 53b6ba64d8b29fddc7615c759d60e1c792249d426a344200fc4524a29d3d5331
+          approved_parent_hash: 2d3e1d9aeb52dd095a97115690758f04f5a54fe5fc437bbbb778b89272bd7e87
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestGlossaryAcceptance_AT_25
+            recorded_at: "2026-08-30T09:48:13Z"
+    - id: US-22
+      kind: story
+      title: Release cut with feature manifest
+      body: As the release owner I want a single command that merges the base branch into the release branch with a merge message listing the newly released features, and maintains a FEATURES.md (feature headings plus glossary) that lives only on the release branch — the base branch stays clean because this flow never merges back (release fixes are cherry-picked).
+      status: done
+      acceptance_criteria:
+        - id: US-22.AC-1
+          given: done features merged into the base branch since the last release
+          when: the human runs trellis release
+          then: the base branch is merged --no-ff into the release branch (created from the base on first release, name configurable, default main) and the merge message lists each newly released feature as story id and title
+        - id: US-22.AC-2
+          given: a completed release
+          when: the release branch is inspected
+          then: 'FEATURES.md is current: all done story titles plus the full glossary; the file exists only on the release branch, never on the base branch'
+        - id: US-22.AC-3
+          given: no new feature merges since the last release
+          when: the human runs trellis release
+          then: 'the release is blocked: nothing to release'
+        - id: US-22.AC-4
+          given: stale specs or a dirty main worktree
+          when: the human runs trellis release
+          then: the release is blocked naming the stale nodes or the dirty state — a release snapshots honest context
+      approved_content_hash: f1e15264f706efca71a7a6766c40f59054324c18684547596bf4579c7fc94eec
+      children:
+        - id: AS-22
+          kind: arch
+          title: Release as engine verb behind a CLI-only command
+          body: 'Releasing is a human act: trellis release <project> stays off the MCP surface, like gate configuration. The engine computes the delta from git (merge subjects in release..base written by finish), blocks on stale specs and a dirty main worktree, creates the release branch from base on first use, merges --no-ff with the feature list in the message, regenerates FEATURES.md from done stories and the glossary, commits it on the release branch only, and parks the main worktree back on base. The release branch name is project config (release_branch, default main), editable only via the CLI.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 10b0f347b23e159cf8a528457ac64032bcfa33605e9b2e83fcbd087f59f5ff0c
+          approved_parent_hash: f1e15264f706efca71a7a6766c40f59054324c18684547596bf4579c7fc94eec
+          children:
+            - id: DD-23
+              kind: detail_design
+              title: Release mechanics
+              body: 'engine.Release: stale/dirty guards, delta via git log release..base --merges parsing the ''Merge feature/US-n: title (trellis finish)'' subjects, branch create-on-first-use, checkout release, merge --no-ff with the feature list, write FEATURES.md (featuresMarkdown over done stories + glossary), commit, checkout base. store: release_branch column with additive migration; config flag --release.'
+              approved_content_hash: ba91c9a5904b8b334b5b3356af8501883cf19a171d88126e4e5341f109bfe4ce
+              approved_parent_hash: 10b0f347b23e159cf8a528457ac64032bcfa33605e9b2e83fcbd087f59f5ff0c
+              children:
+                - id: UT-23
+                  kind: unit_test
+                  title: Release building blocks unit tests
+                  body: Unit-test parseFeatureSubjects on real and hostile merge subjects, and featuresMarkdown rendering (headings, glossary section, empty glossary).
+                  approved_content_hash: f8fa9698ab0eff3887bb28701917256daa73fc453274d79e8aa6441c2d1186e3
+                  approved_parent_hash: ba91c9a5904b8b334b5b3356af8501883cf19a171d88126e4e5341f109bfe4ce
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestReleaseBuildingBlocks_UT_23
+                    recorded_at: "2026-08-30T10:04:49Z"
+            - id: IT-22
+              kind: integration_test
+              title: Release flow integration
+              body: 'Engine + real git repo: first and incremental release incl. delta computation from merge subjects, FEATURES.md content and its absence on the base branch, every blocking condition, and the main worktree parked back on base afterwards.'
+              approved_content_hash: a075ca8073eaa8c57a8d8312f483ffc86554810ca331bca7d949f3200323f3f1
+              approved_parent_hash: 10b0f347b23e159cf8a528457ac64032bcfa33605e9b2e83fcbd087f59f5ff0c
+              evidence:
+                tests:
+                    - trellis/internal/core::TestReleaseFlowIntegration_IT_22
+                recorded_at: "2026-08-30T10:04:49Z"
+        - id: AT-26
+          kind: acceptance_test
+          title: Release acceptance
+          body: 'Drive the real CLI entrypoint against a repo with finished stories: first release creates the release branch with FEATURES.md and a merge/commit listing all features; finish another story, second release lists only the new feature; assert FEATURES.md is absent on the base branch; assert the nothing-to-release, stale-spec and dirty-worktree blocks.'
+          covers:
+            - US-22.AC-1
+            - US-22.AC-2
+            - US-22.AC-3
+            - US-22.AC-4
+          approved_content_hash: ba214a8ac403ac2fd6efd20b81f4882f2e8319cb9e45a7e25d0497f985f1de4e
+          approved_parent_hash: f1e15264f706efca71a7a6766c40f59054324c18684547596bf4579c7fc94eec
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestReleaseCLIAcceptance_AT_26
+            recorded_at: "2026-08-30T10:04:49Z"
+    - id: US-23
+      kind: story
+      title: Boards served by the MCP server
+      body: 'As a human I want the board UI available whenever an agent session is connected: the MCP server also serves the boards of every project over HTTP — an index to click into the board I care about, or a direct redirect when there is only one.'
+      status: done
+      acceptance_criteria:
+        - id: US-23.AC-1
+          given: a starting MCP server (trellis serve)
+          when: it comes up
+          then: the board HTTP server starts automatically on 127.0.0.1:7420 (overridable via --board-addr, value off disables it) while the MCP protocol on stdio is untouched
+        - id: US-23.AC-2
+          given: several projects in the store
+          when: the server root is opened
+          then: an index page lists every project linking to its live board under /p/<project-id>/ (fresh render per request, SSE reload per project)
+        - id: US-23.AC-3
+          given: exactly one project
+          when: the server root is opened
+          then: the browser is redirected straight to that project's board
+        - id: US-23.AC-4
+          given: an already occupied board address
+          when: the MCP server starts
+          then: it runs without the board and notes the fact on stderr — the agent connection is never blocked
+      approved_content_hash: be9d32b4f226aff86fce02ae7ce77c3a2ca7fb8124a99ae528aafe3e1aa3a4ac
+      children:
+        - id: AS-23
+          kind: arch
+          title: Multi-project board handler beside stdio
+          body: 'internal/board gains a store-backed multi-project handler: / lists or redirects, /p/<id>/ renders that project''s board fresh per request, /p/<id>/events streams its reload ticks; engines are created per request from the shared store. trellis serve starts it in a goroutine before the stdio loop; all board logging goes to stderr because stdout belongs to the MCP protocol; a bind failure degrades to a notice, never an exit. The reload script uses a relative events URL so the same page works at any mount point.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+          approved_parent_hash: be9d32b4f226aff86fce02ae7ce77c3a2ca7fb8124a99ae528aafe3e1aa3a4ac
+          children:
+            - id: DD-24
+              kind: detail_design
+              title: MultiHandler and serve wiring
+              body: 'board.MultiHandler(st): routes /, /p/{id}/, /p/{id}/events; index template on the board tokens; redirect for a single project; engines per request. cmd serve: --board-addr flag (default 127.0.0.1:7420, off disables), net.Listen + goroutine before srv.Run, stderr notices. reloadScript switches to a relative events URL shared with the single-board server.'
+              approved_content_hash: b02e913923e41a6cac9ef2a71d979de30f95b696b28feabfd550e7900e33c859
+              approved_parent_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+              children:
+                - id: UT-24
+                  kind: unit_test
+                  title: MultiHandler unit tests
+                  body: Unit-test the index rendering (names, links, escaping), the single-project redirect, unknown-id 404, and that the reload script's events URL is relative.
+                  approved_content_hash: dada0fa29188cbdb0096ecd398abb00b5d82c7a47575fc560a59e8b479d8a4d1
+                  approved_parent_hash: b02e913923e41a6cac9ef2a71d979de30f95b696b28feabfd550e7900e33c859
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestMultiHandlerUnit_UT_24
+                    recorded_at: "2026-08-30T13:07:23Z"
+            - id: IT-23
+              kind: integration_test
+              title: Multi-board handler integration
+              body: 'Handler against a store with one and several projects via httptest: redirect vs index, per-project rendering and SSE ticks, 404 for unknown project ids.'
+              approved_content_hash: 66620f388ce78a57fd7b158395b2d42f5c73e180b3f7d03fcffb84f3aa298e63
+              approved_parent_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+              evidence:
+                tests:
+                    - trellis/internal/board::TestMultiBoardIntegration_IT_23
+                recorded_at: "2026-08-30T13:07:23Z"
+        - id: AT-27
+          kind: acceptance_test
+          title: Served boards acceptance
+          body: 'Drive the real serve entrypoint with stdin held open: assert the board comes up on the given address and the root redirects with one project; add a second project and assert the index lists both with working board links and per-project SSE; occupy the address first and assert serve still runs with a stderr notice.'
+          covers:
+            - US-23.AC-1
+            - US-23.AC-2
+            - US-23.AC-3
+            - US-23.AC-4
+          approved_content_hash: ca0e26e0f805f666f035d0cd0fafaf0555081485804a26b6a6b56ad0fab0ca08
+          approved_parent_hash: be9d32b4f226aff86fce02ae7ce77c3a2ca7fb8124a99ae528aafe3e1aa3a4ac
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestServedBoardsAcceptance_AT_27
+            recorded_at: "2026-08-30T13:07:23Z"
+    - id: US-24
+      kind: story
+      title: Project description
+      body: 'As a team I want a GitHub-style one-line project description that reaches every context surface: the agent''s overview, the board header, the boards index and the release manifest.'
+      status: done
+      acceptance_criteria:
+        - id: US-24.AC-1
+          given: a project
+          when: the agent sets a description via set_description
+          then: it is stored; descriptions above 200 characters are rejected — one line, GitHub style
+        - id: US-24.AC-2
+          given: a set description
+          when: the agent calls get_overview
+          then: the description is part of the overview — standing context for every session
+        - id: US-24.AC-3
+          given: a set description
+          when: the board, the boards index and FEATURES.md render
+          then: all three lead with the description under the project name
+      approved_content_hash: 863a886ee60cf8441f071c1cd7f4894101ff79ceb0b8df63854238300cb3b777
+      children:
+        - id: AS-24
+          kind: arch
+          title: One column, every surface
+          body: The description is project config (own column, additive migration), written via an MCP tool because keeping it current is context work. Overview, board header, index card and featuresMarkdown all read the same field; the CLI config command can also set it (--desc) and shows it.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: 283ad8049fa30b2df690c4968fe339fd07a01731951c7bdf74f7ec2abe78b88f
+          approved_parent_hash: 863a886ee60cf8441f071c1cd7f4894101ff79ceb0b8df63854238300cb3b777
+          children:
+            - id: DD-25
+              kind: detail_design
+              title: Description plumbing
+              body: 'store: description column on projects; engine: SetDescription (<=200 chars) + Overview field; board: header sub and index card; core: featuresMarkdown gains the name/description header; CLI: config --desc.'
+              approved_content_hash: dee50bed2bac099a46b1c702b9e2799a73ca5613a4c7b1199bf403739ef7dc3c
+              approved_parent_hash: 283ad8049fa30b2df690c4968fe339fd07a01731951c7bdf74f7ec2abe78b88f
+              children:
+                - id: UT-25
+                  kind: unit_test
+                  title: Description unit tests
+                  body: Unit-test the limit, overwrite semantics, and the manifest header rendering with and without a description.
+                  approved_content_hash: 9f4043bba12d2f7acb21aa79d83ee35ed71a1fa28011467d3f50995f0bb2e533
+                  approved_parent_hash: dee50bed2bac099a46b1c702b9e2799a73ca5613a4c7b1199bf403739ef7dc3c
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestDescriptionUnit_UT_25
+                    recorded_at: "2026-08-30T13:12:18Z"
+            - id: IT-24
+              kind: integration_test
+              title: Project description integration
+              body: 'Store + engine + board: set/overwrite via engine with limit enforcement, overview inclusion, board and index rendering, manifest header.'
+              approved_content_hash: 49f28142084e5497a0e9c43068aec359427327b41b75ddf254f83d79080ff1e8
+              approved_parent_hash: 283ad8049fa30b2df690c4968fe339fd07a01731951c7bdf74f7ec2abe78b88f
+              evidence:
+                tests:
+                    - trellis/internal/board::TestDescriptionSurfaces_IT_24
+                    - trellis/internal/core::TestDescriptionIntegration_IT_24
+                recorded_at: "2026-08-30T13:12:18Z"
+        - id: AT-28
+          kind: acceptance_test
+          title: Description acceptance
+          body: 'Through MCP: set a description, assert the limit rejection, read it back from get_overview; render the board and the boards index via the engine and store asserting the description appears; assert the release manifest leads with name and description.'
+          covers:
+            - US-24.AC-1
+            - US-24.AC-2
+            - US-24.AC-3
+          approved_content_hash: 97a0d482e599dd72418cb73ed8606aa38b507ad0288ce73de30f1e5943ab058e
+          approved_parent_hash: 863a886ee60cf8441f071c1cd7f4894101ff79ceb0b8df63854238300cb3b777
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestDescriptionAcceptance_AT_28
+            recorded_at: "2026-08-30T13:12:18Z"
+    - id: US-25
+      kind: story
+      title: YAML export and import
+      body: As the operator I want the whole spec database exported as human-readable YAML — committed on the release branch with every release as a backup — and an import that restores a project faithfully from that file.
+      status: done
+      acceptance_criteria:
+        - id: US-25.AC-1
+          given: a project
+          when: the human runs trellis export
+          then: a human-readable YAML document is written containing project config and description, glossary, id counters, cross-cutting specs and full story trees with acceptance criteria, covers, paths, dependency pins, approval hashes, status and evidence
+        - id: US-25.AC-2
+          given: a release
+          when: it completes
+          then: the export is committed as trellis-specs.yaml beside FEATURES.md on the release branch — every release doubles as a backup
+        - id: US-25.AC-3
+          given: an export file
+          when: the human runs trellis import with a new project name and repo
+          then: 'a new project is created with the restored content: approvals stay valid, statuses and counters are preserved so ids are never reused'
+        - id: US-25.AC-4
+          given: an imported project
+          when: it is exported again
+          then: the export equals the original one apart from project identity — the backup is proven faithful (round trip)
+      approved_content_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+      children:
+        - id: AS-25
+          kind: arch
+          title: One YAML document, nested like the spec tree
+          body: Export renders one YAML document (gopkg.in/yaml.v3) with stories as nested trees — the human-readable shape mirrors the composition tree. Approval hashes are exported verbatim (content hashes recompute identically from content), counters ship along so imported projects never reuse ids, the event log stays out (flight recorder, not state). Import creates a fresh project and refuses unknown format versions.
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
+          approved_parent_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+          children:
+            - id: DD-26
+              kind: detail_design
+              title: Export document and importer
+              body: 'core/export: yaml types mirroring nodes/ACs/deps/evidence with a trellis_export version field; Engine.ExportYAML walks cross-cutting specs then story trees; Import(st, data, project) inserts via the store preserving approval columns and counters; release writes trellis-specs.yaml next to FEATURES.md; CLI: export [-o], import -f --name --repo.'
+              approved_content_hash: 62866dd0894298993ded76cf6441252ca60e4982cdae039c1ff91987f75b797d
+              approved_parent_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
+              children:
+                - id: UT-26
+                  kind: unit_test
+                  title: Export format unit tests
+                  body: Unit-test yaml round-tripping of hostile content (multiline bodies, unicode, quotes), version rejection, and counter preservation.
+                  approved_content_hash: 7ec2972ecda3f1c9683c05a4ef251481d824f93a428beef1c7fc05bd663d1b35
+                  approved_parent_hash: 62866dd0894298993ded76cf6441252ca60e4982cdae039c1ff91987f75b797d
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestExportFormat_UT_26
+                    recorded_at: "2026-08-30T13:16:10Z"
+            - id: IT-25
+              kind: integration_test
+              title: YAML export and import integration
+              body: 'Store + engine: full round trip over a maximally populated project incl. sequencing links, cross-tree pins, evidence and counters; release file presence; unknown-version rejection.'
+              approved_content_hash: 65d151a308621dacc2aae759ab20098c985a6f85a8e1a047028ad7e37f853753
+              approved_parent_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
+              evidence:
+                tests:
+                    - trellis/internal/core::TestExportImportIntegration_IT_25
+                recorded_at: "2026-08-30T13:16:10Z"
+        - id: AT-29
+          kind: acceptance_test
+          title: Export/import acceptance
+          body: 'Drive the real CLI entrypoint: export a populated project (deps, evidence, glossary, paths, done stories), import it as a new project, export again and assert the round trip; assert approvals and statuses survived and new ids continue after the imported counters; assert a release commits trellis-specs.yaml on the release branch.'
+          covers:
+            - US-25.AC-1
+            - US-25.AC-2
+            - US-25.AC-3
+            - US-25.AC-4
+          approved_content_hash: bf4a6f1c1d6eb4e302168f61dfb5fdcb85dc368bf3d81dfcf9b7c129a9812b3c
+          approved_parent_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestExportImportCLIAcceptance_AT_29
+            recorded_at: "2026-08-30T13:16:10Z"
