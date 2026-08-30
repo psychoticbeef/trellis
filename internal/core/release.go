@@ -2,6 +2,8 @@ package core
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -101,7 +103,22 @@ func (e *Engine) releaseUnlocked() (string, error) {
 	if _, err := g.Run("checkout", rel); err != nil {
 		return "", err
 	}
-	restore := func() { _, _ = g.Run("checkout", base) }
+	// unwind: a failed release is rolled back atomically — the merge is
+	// reset, manifest files are removed, and the base checkout returns clean.
+	preSHA, err := g.Run("rev-parse", "HEAD")
+	if err != nil {
+		_, _ = g.Run("checkout", base)
+		return "", err
+	}
+	restore := func() {
+		_, _ = g.Run("reset", "--hard", preSHA)
+		_ = os.Remove(filepath.Join(e.Project.RepoPath, "FEATURES.md"))
+		_ = os.Remove(filepath.Join(e.Project.RepoPath, "trellis-specs.yaml"))
+		_, _ = g.Run("checkout", base)
+		if firstRelease {
+			_, _ = g.Run("branch", "-D", rel) // we created it; a failed first release leaves no trace
+		}
+	}
 
 	msg := fmt.Sprintf("Release %s: %d feature(s)\n", time.Now().Format("2006-01-02"), len(features))
 	for _, f := range features {
@@ -155,14 +172,15 @@ func (e *Engine) releaseUnlocked() (string, error) {
 	if !firstRelease {
 		commitMsg = "Update release manifests"
 	}
-	if _, err := g.Run("commit", "-m", commitMsg); err != nil {
+	// Trellis-authored commit: bypass the hooks trellis itself installed.
+	if _, err := g.Run("commit", "--no-verify", "-m", commitMsg); err != nil {
 		// Nothing changed in the manifest: fine after a pure merge.
 		if !strings.Contains(err.Error(), "nothing to commit") {
 			restore()
 			return "", err
 		}
 	}
-	restore()
+	_, _ = g.Run("checkout", base)
 	e.st.AppendEvent(e.pid(), "release", "", fmt.Sprintf("%d feature(s) -> %s", len(features), rel))
 	return fmt.Sprintf("released %d feature(s) to %s:\n- %s", len(features), rel, strings.Join(features, "\n- ")), nil
 }
