@@ -201,3 +201,122 @@ func TestGlossaryIntegration_IT_21(t *testing.T) {
 		t.Error("AC text not term-marked")
 	}
 }
+
+// TestKanbanRendering_UT_29 proves UT-29 (DD-29 "Kanban template"): card
+// escaping, empty-board rendering, exactly one open-on-navigate script, and
+// unique element ids despite card links.
+func TestKanbanRendering_UT_29(t *testing.T) {
+	e, _ := newEngine(t)
+	html, err := board.Render(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(html, "function openTarget"); got != 1 {
+		t.Fatalf("open-on-navigate script count = %d, want 1", got)
+	}
+	for _, col := range []string{">todo<", ">refined<", ">in progress<", ">done<"} {
+		if !strings.Contains(html, col) {
+			t.Errorf("empty board missing column %q", col)
+		}
+	}
+
+	s, err := e.CreateNode(model.KindStory, "", `card <b>title</b>`, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, _ = board.Render(e)
+	if strings.Contains(html, "card <b>title</b>") || !strings.Contains(html, "card &lt;b&gt;title&lt;/b&gt;") {
+		t.Fatal("card title not escaped")
+	}
+	if got := strings.Count(html, `id="`+s.ID+`"`); got != 1 {
+		t.Fatalf("story id occurs %d times as element id, want 1", got)
+	}
+	if got := strings.Count(html, `href="#`+s.ID+`"`); got != 1 {
+		t.Fatalf("card link occurs %d times, want 1", got)
+	}
+}
+
+// TestKanbanIntegration_IT_28 proves IT-28 (US-28 "Kanban board"): column
+// ordering and counts across statuses, freshness markers on cards, details
+// sections collapsed with the full content inside.
+func TestKanbanIntegration_IT_28(t *testing.T) {
+	e, st := newEngine(t)
+	approveNode := func(id string) {
+		t.Helper()
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One todo (stale: unapproved), one refined, one done (via store setup).
+	stale, _ := e.CreateNode(model.KindStory, "", "stale story", "", nil)
+	build := func(title string) string {
+		s, _ := e.CreateNode(model.KindStory, "", title, "story body", nil)
+		e.AddAC(s.ID, "g", "w", "t")
+		at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+		arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+		it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+		dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+		ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+		for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+			approveNode(id)
+		}
+		if _, err := e.Transition(s.ID, "refine"); err != nil {
+			t.Fatal(err)
+		}
+		return s.ID
+	}
+	refined := build("refined story")
+	doneID := build("done story")
+	if err := st.SetNodeStatus("p1", doneID, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	html, err := board.Render(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Column order: todo before refined before in progress before done.
+	iTodo := strings.Index(html, ">todo<")
+	iRef := strings.Index(html, ">refined<")
+	iProg := strings.Index(html, ">in progress<")
+	iDone := strings.Index(html, ">done<")
+	if !(iTodo < iRef && iRef < iProg && iProg < iDone) {
+		t.Fatalf("column order wrong: %d %d %d %d", iTodo, iRef, iProg, iDone)
+	}
+	// Cards sit in their columns: the stale card before the refined column
+	// header, the refined card between refined and in-progress headers.
+	iStale := strings.Index(html, `href="#`+stale.ID+`"`)
+	iRefCard := strings.Index(html, `href="#`+refined+`"`)
+	iDoneCard := strings.Index(html, `href="#`+doneID+`"`)
+	if !(iStale > iTodo && iStale < iRef) {
+		t.Fatal("todo card not in todo column")
+	}
+	if !(iRefCard > iRef && iRefCard < iProg) {
+		t.Fatal("refined card not in refined column")
+	}
+	if iDoneCard < iDone {
+		t.Fatal("done card not in done column")
+	}
+	// Stale marker on the unapproved card, none on the refined one.
+	staleCard := html[iStale : strings.Index(html[iStale:], "</a>")+iStale]
+	if !strings.Contains(staleCard, "stale") {
+		t.Fatalf("stale card missing marker: %s", staleCard)
+	}
+	refCard := html[iRefCard : strings.Index(html[iRefCard:], "</a>")+iRefCard]
+	if strings.Contains(refCard, "stale") {
+		t.Fatalf("fresh card carries stale marker: %s", refCard)
+	}
+	// Details: collapsed (no open attribute) with full content inside.
+	if !strings.Contains(html, `<details class="story" id="`+refined+`">`) {
+		t.Fatal("story detail must be a collapsed details element")
+	}
+	for _, want := range []string{"story body", "gates open", `class="gwt"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("details missing %q", want)
+		}
+	}
+}
