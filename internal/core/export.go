@@ -212,7 +212,7 @@ func Import(st *store.Store, data []byte, proj store.Project) error {
 			deps = append(deps, depEdge{node: en.ID, dep: d})
 		}
 		if en.Evidence != nil {
-			if err := st.SetEvidence(pid, en.ID, en.Evidence.Tests); err != nil {
+			if err := st.SetEvidenceAt(pid, en.ID, en.Evidence.Tests, en.Evidence.RecordedAt); err != nil {
 				return err
 			}
 		}

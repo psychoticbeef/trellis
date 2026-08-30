@@ -518,9 +518,15 @@ type Evidence struct {
 // SetEvidence records the proving tests for a spec node, replacing any
 // earlier record — evidence is current state, not history.
 func (s *Store) SetEvidence(projectID, nodeID string, tests []string) error {
+	return s.SetEvidenceAt(projectID, nodeID, tests, now())
+}
+
+// SetEvidenceAt is SetEvidence with an explicit timestamp — import uses it
+// to preserve the original recording time.
+func (s *Store) SetEvidenceAt(projectID, nodeID string, tests []string, recordedAt string) error {
 	_, err := s.db.Exec(`INSERT INTO evidence (project_id, node_id, tests, recorded_at) VALUES (?,?,?,?)
 		ON CONFLICT(project_id, node_id) DO UPDATE SET tests=excluded.tests, recorded_at=excluded.recorded_at`,
-		projectID, nodeID, stringsJSON(tests), now())
+		projectID, nodeID, stringsJSON(tests), recordedAt)
 	return err
 }
 
