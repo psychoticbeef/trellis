@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 29
-    AT: 33
+    AS: 30
+    AT: 34
     CC: 4
-    DD: 30
-    IT: 29
-    US: 29
-    UT: 30
+    DD: 31
+    IT: 30
+    US: 30
+    UT: 31
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -71,6 +71,7 @@ counters:
     ac:US-27: 4
     ac:US-28: 3
     ac:US-29: 4
+    ac:US-30: 3
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2054,3 +2055,74 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestBootstrapAcceptance_AT_33
             recorded_at: "2026-08-30T14:00:10Z"
+    - id: US-30
+      kind: story
+      title: Interoperable MCP output schemas
+      body: As an integrator I want every trellis MCP tool to declare an object-typed output schema, because strict MCP clients (found via pi-mcp-adapter) reject a tools/list containing bare array outputs — one nonconforming tool takes the whole server down for that client.
+      status: done
+      acceptance_criteria:
+        - id: US-30.AC-1
+          given: a strict MCP client validating tools/list
+          when: it inspects every trellis tool
+          then: each declared outputSchema has type object — no tool breaks the listing
+        - id: US-30.AC-2
+          given: search_specs and specs_for_path
+          when: they return results
+          then: the arrays arrive wrapped in stable envelope objects (hits, stories) instead of bare arrays
+        - id: US-30.AC-3
+          given: future tool additions
+          when: the test suite runs
+          then: a schema lint over the live tools/list fails the build if any tool regresses to a non-object output schema
+      approved_content_hash: 9f9d6e7ab44b7369fa8f6a1b23b500bfa98d2eb0039326bc55bab242e9feb9de
+      children:
+        - id: AS-30
+          kind: arch
+          title: Envelope objects at the tool boundary
+          body: Engine types stay as they are; only the MCP layer wraps list results in envelope structs so the inferred schemas are objects. The interop rule is enforced by a test enumerating the live tool listing, not by convention.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: da17efe64b1041e154f4ffe8e42d33e5575c0e9bbba5c1a3edb136ab67417f88
+          approved_parent_hash: 9f9d6e7ab44b7369fa8f6a1b23b500bfa98d2eb0039326bc55bab242e9feb9de
+          children:
+            - id: DD-31
+              kind: detail_design
+              title: Envelope structs
+              body: 'mcpserver: searchOut{hits []core.SearchHit}, storiesOut{stories []core.StorySummary}; handlers return the envelopes; existing clients read one level deeper.'
+              approved_content_hash: 16949f8ef5a8f964f7791a7ce5812140e59991c7ee6416b29d22c1a7b852a9d9
+              approved_parent_hash: da17efe64b1041e154f4ffe8e42d33e5575c0e9bbba5c1a3edb136ab67417f88
+              children:
+                - id: UT-31
+                  kind: unit_test
+                  title: Envelope unit tests
+                  body: Unit-test that empty results serialize as empty arrays inside the envelope (never null), keeping downstream parsing simple.
+                  approved_content_hash: 8126000443ef4b1654fa42f5e2e009b561ec610a181f49f030cd448cfa07c144
+                  approved_parent_hash: 16949f8ef5a8f964f7791a7ce5812140e59991c7ee6416b29d22c1a7b852a9d9
+                  evidence:
+                    tests:
+                        - trellis/internal/mcpserver::TestEnvelopeSerialization_UT_31
+                    recorded_at: "2026-08-30T14:10:57Z"
+            - id: IT-30
+              kind: integration_test
+              title: Schema lint integration
+              body: 'In-memory MCP session: tools/list schema lint over all tools; envelope roundtrips for both wrapped tools with hits present and empty.'
+              approved_content_hash: 0b2c7a048ab44c5b42c25eb4edc1637fdecf9ff8ac1b5035818a4b349e1afde7
+              approved_parent_hash: da17efe64b1041e154f4ffe8e42d33e5575c0e9bbba5c1a3edb136ab67417f88
+              evidence:
+                tests:
+                    - trellis/internal/mcpserver::TestSchemaLintIntegration_IT_30
+                recorded_at: "2026-08-30T14:10:57Z"
+        - id: AT-34
+          kind: acceptance_test
+          title: Schema interop acceptance
+          body: 'Through an MCP client session: fetch tools/list and assert every present outputSchema is type object (the lint that guards regressions); call search_specs and specs_for_path and assert the envelope shapes {hits: [...]} and {stories: [...]}.'
+          covers:
+            - US-30.AC-1
+            - US-30.AC-2
+            - US-30.AC-3
+          approved_content_hash: f1e7f26b35fc4738eae0e8c1fb3f502320683e373dc5dd3a1f916d07440a23dd
+          approved_parent_hash: 9f9d6e7ab44b7369fa8f6a1b23b500bfa98d2eb0039326bc55bab242e9feb9de
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestSchemaInteropAcceptance_AT_34
+            recorded_at: "2026-08-30T14:10:57Z"
