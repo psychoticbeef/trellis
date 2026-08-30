@@ -539,3 +539,22 @@ func renderBoard(t *testing.T, _ *mcp.ClientSession) string {
 	}
 	return html
 }
+
+// TestDescriptionAcceptance_AT_28 proves AT-28 (US-24 "Project
+// description") through MCP plus the rendered surfaces.
+func TestDescriptionAcceptance_AT_28(t *testing.T) {
+	cs := client(t)
+	call(t, cs, "set_description", map[string]any{"description": "deterministic spec tracking for LLM-driven development"})
+	callErr(t, cs, "set_description", map[string]any{"description": strings.Repeat("x", 250)},
+		"exceeds 200 characters", "GitHub style")
+
+	o := call(t, cs, "get_overview", map[string]any{})
+	if o["description"] != "deterministic spec tracking for LLM-driven development" {
+		t.Fatalf("overview description = %v", o["description"])
+	}
+
+	html := renderBoard(t, cs)
+	if !strings.Contains(html, "deterministic spec tracking for LLM-driven development") {
+		t.Fatal("board missing description")
+	}
+}

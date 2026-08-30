@@ -26,9 +26,13 @@ func parseFeatureSubjects(subjects []string) []string {
 
 // featuresMarkdown renders FEATURES.md: done feature headings plus the
 // glossary. Lives only on the release branch.
-func featuresMarkdown(stories []model.Node, terms []store.TermDef) string {
+func featuresMarkdown(name, description string, stories []model.Node, terms []store.TermDef) string {
 	var b strings.Builder
-	b.WriteString("# Features\n\n")
+	fmt.Fprintf(&b, "# %s\n\n", name)
+	if description != "" {
+		fmt.Fprintf(&b, "> %s\n\n", description)
+	}
+	b.WriteString("## Features\n\n")
 	if len(stories) == 0 {
 		b.WriteString("_none yet_\n")
 	}
@@ -36,7 +40,7 @@ func featuresMarkdown(stories []model.Node, terms []store.TermDef) string {
 		fmt.Fprintf(&b, "- **%s** — %s\n", s.ID, s.Title)
 	}
 	if len(terms) > 0 {
-		b.WriteString("\n# Glossary\n\n")
+		b.WriteString("\n## Glossary\n\n")
 		for _, td := range terms {
 			fmt.Fprintf(&b, "- **%s** — %s\n", td.Term, td.Definition)
 		}
@@ -128,17 +132,28 @@ func (e *Engine) Release() (string, error) {
 		restore()
 		return "", err
 	}
-	if err := g.WriteFile("FEATURES.md", featuresMarkdown(done, terms)); err != nil {
+	if err := g.WriteFile("FEATURES.md", featuresMarkdown(e.Project.Name, e.Project.Description, done, terms)); err != nil {
 		restore()
 		return "", err
 	}
-	if _, err := g.Run("add", "FEATURES.md"); err != nil {
+	// Every release doubles as a backup: the full spec database rides along
+	// as human-readable YAML.
+	export, err := e.ExportYAML()
+	if err != nil {
+		restore()
+		return "", err
+	}
+	if err := g.WriteFile("trellis-specs.yaml", export); err != nil {
+		restore()
+		return "", err
+	}
+	if _, err := g.Run("add", "FEATURES.md", "trellis-specs.yaml"); err != nil {
 		restore()
 		return "", err
 	}
 	commitMsg := msg
 	if !firstRelease {
-		commitMsg = "Update FEATURES.md"
+		commitMsg = "Update release manifests"
 	}
 	if _, err := g.Run("commit", "-m", commitMsg); err != nil {
 		// Nothing changed in the manifest: fine after a pure merge.

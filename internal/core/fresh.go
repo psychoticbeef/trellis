@@ -388,6 +388,7 @@ type CCSummary struct {
 
 type Overview struct {
 	Project      string          `json:"project"`
+	Description  string          `json:"description,omitempty"`
 	Stories      []StorySummary  `json:"stories"`
 	CrossCutting []CCSummary     `json:"cross_cutting"`
 	Glossary     []store.TermDef `json:"glossary"`
@@ -395,7 +396,7 @@ type Overview struct {
 }
 
 func (e *Engine) Overview() (Overview, error) {
-	o := Overview{Project: e.Project.Name, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, Glossary: []store.TermDef{}, StaleNodes: []string{}}
+	o := Overview{Project: e.Project.Name, Description: e.Project.Description, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, Glossary: []store.TermDef{}, StaleNodes: []string{}}
 	if terms, err := e.st.ListTerms(e.pid()); err != nil {
 		return o, err
 	} else if terms != nil {

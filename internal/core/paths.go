@@ -136,3 +136,19 @@ func (e *Engine) DeleteTerm(term string) error {
 func (e *Engine) Terms() ([]store.TermDef, error) {
 	return e.st.ListTerms(e.pid())
 }
+
+const maxDescriptionLen = 200
+
+// SetDescription stores the GitHub-style one-line project description.
+func (e *Engine) SetDescription(desc string) error {
+	desc = strings.TrimSpace(desc)
+	if len(desc) > maxDescriptionLen {
+		return fmt.Errorf("description exceeds %d characters (%d) — one line, GitHub style: cut it down", maxDescriptionLen, len(desc))
+	}
+	e.Project.Description = desc
+	if err := e.st.UpdateProject(e.Project); err != nil {
+		return err
+	}
+	e.st.AppendEvent(e.pid(), "describe", "", desc)
+	return nil
+}
