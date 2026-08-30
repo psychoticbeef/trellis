@@ -158,3 +158,34 @@ func TestAncestorPairs_UT_10(t *testing.T) {
 		t.Fatal("diverged: feature must not be ancestor of develop")
 	}
 }
+
+// TestDiscardBranch_UT_11 proves UT-11 (DD-11 "gitops.DiscardBranch"): happy
+// and dirty paths of branch discarding.
+func TestDiscardBranch_UT_11(t *testing.T) {
+	g, dir := repo(t)
+	if err := g.EnsureFeatureBranch("feature/X", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, dir, "w.txt", "work", "doomed work")
+
+	// Dirty worktree blocks the discard.
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DiscardBranch("feature/X", "develop"); err == nil ||
+		!strings.Contains(err.Error(), "never silently destroyed") {
+		t.Fatalf("want dirty-worktree rejection, got %v", err)
+	}
+	os.Remove(filepath.Join(dir, "dirty.txt"))
+
+	// Clean discard: base checked out, branch gone.
+	if err := g.DiscardBranch("feature/X", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, _ := g.CurrentBranch(); cur != "develop" {
+		t.Fatalf("on %s, want develop", cur)
+	}
+	if out := git(t, dir, "branch", "--list", "feature/X"); out != "" {
+		t.Fatalf("feature/X still exists: %s", out)
+	}
+}

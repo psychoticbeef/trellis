@@ -116,3 +116,22 @@ func (g Git) MergeToBase(branch, base, message string) error {
 	}
 	return nil
 }
+
+// DiscardBranch abandons a feature branch: checks out base and force-deletes
+// the branch. Requires a clean worktree so work is never silently destroyed.
+func (g Git) DiscardBranch(branch, base string) error {
+	clean, err := g.IsClean()
+	if err != nil {
+		return err
+	}
+	if !clean {
+		return fmt.Errorf("worktree not clean: commit or stash changes before aborting — work is never silently destroyed")
+	}
+	if _, err := g.run("checkout", base); err != nil {
+		return err
+	}
+	if _, err := g.run("branch", "-D", branch); err != nil {
+		return fmt.Errorf("checked out %s, but deleting %s failed: %w", base, branch, err)
+	}
+	return nil
+}

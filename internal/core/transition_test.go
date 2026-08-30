@@ -352,3 +352,65 @@ func TestMergeGateIntegration_IT_9(t *testing.T) {
 		t.Fatalf("status = %s, want done", got)
 	}
 }
+
+// TestAbortIntegration_IT_10 proves IT-10 (US-10): the full abort path incl.
+// the blocked dirty case, the status guard, and restart creating a fresh
+// branch from base.
+func TestAbortIntegration_IT_10(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath = repo
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+
+	// Status guard: abort outside in_progress is rejected.
+	_, err := e.Transition(tr.story, "abort")
+	wantErr(t, err, "abort blocked", `abort requires "in_progress"`)
+
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "doomed.txt"), "wrong approach")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "doomed work")
+
+	// Dirty worktree blocks abort.
+	writeFile(t, filepath.Join(repo, "dirty.txt"), "x")
+	_, err = e.Transition(tr.story, "abort")
+	wantErr(t, err, "abort blocked", "never silently destroyed")
+	if err := os.Remove(filepath.Join(repo, "dirty.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Abort: branch discarded, base checked out, refined again.
+	if _, err := e.Transition(tr.story, "abort"); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, e, tr.story); got != "refined" {
+		t.Fatalf("status = %s, want refined", got)
+	}
+	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("on %s, want develop", got)
+	}
+
+	// Restart creates a fresh branch from base — the doomed work is gone.
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "doomed.txt")); err == nil {
+		t.Fatal("doomed work survived the abort")
+	}
+}
