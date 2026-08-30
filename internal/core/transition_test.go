@@ -882,3 +882,65 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 		t.Fatal("backup leaked onto the base branch")
 	}
 }
+
+// TestBatchApprovalIntegration_IT_26 proves IT-26 (US-26 "Batch tree
+// approval"): happy batch over pins and sequencing links against a real
+// store, atomicity on a fully stale tree, refine passes afterwards.
+func TestBatchApprovalIntegration_IT_26(t *testing.T) {
+	e, _ := newEngineStore(t)
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	tr := fullTree(t, e)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Invalidate everything with a story edit.
+	body := "v2"
+	if _, err := e.UpdateNode(tr.story, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	full, err := e.TreeFull(tr.story)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Story.Body != "v2" {
+		t.Fatalf("full tree missing bodies: %+v", full.Story)
+	}
+	hashes := map[string]string{}
+	var walk func(n core.TreeNode)
+	walk = func(n core.TreeNode) {
+		hashes[n.ID] = n.Hash
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(full.Story)
+
+	// Atomicity: one wrong hash, zero approvals on a fully stale tree.
+	bad := map[string]string{}
+	for k, v := range hashes {
+		bad[k] = v
+	}
+	bad[tr.it] = "wrong"
+	ccNode, _ := e.Node(cc.ID)
+	deps := map[string]string{cc.ID: ccNode.Hash}
+	if err := e.ApproveTree(tr.story, bad, deps); err == nil {
+		t.Fatal("bad batch must fail")
+	}
+	// The story edit invalidated the story and its direct children; none of
+	// them may have been approved by the failed batch.
+	for _, id := range []string{tr.story, tr.at, tr.arch} {
+		if n, _ := e.Node(id); n.Fresh {
+			t.Fatalf("%s approved despite failed batch", id)
+		}
+	}
+
+	// Clean batch, then refine.
+	if err := e.ApproveTree(tr.story, hashes, deps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatalf("refine after batch: %v", err)
+	}
+}

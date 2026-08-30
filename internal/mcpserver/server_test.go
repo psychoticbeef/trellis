@@ -558,3 +558,63 @@ func TestDescriptionAcceptance_AT_28(t *testing.T) {
 		t.Fatal("board missing description")
 	}
 }
+
+// TestBatchApprovalAcceptance_AT_30 proves AT-30 (US-26 "Batch tree
+// approval") through MCP: full tree read, batch approval, all-or-nothing
+// rejection, sequencing exemption.
+func TestBatchApprovalAcceptance_AT_30(t *testing.T) {
+	cs := client(t)
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "s", "body": "story body text"})["id"].(string)
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g", "when": "w", "then": "t"})
+	at := call(t, cs, "create_node", map[string]any{"kind": "acceptance_test", "parent_id": story, "title": "at", "body": "at body", "covers": []string{story + ".AC-1"}})["id"].(string)
+	arch := call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": story, "title": "as", "body": "arch body"})["id"].(string)
+	it := call(t, cs, "create_node", map[string]any{"kind": "integration_test", "parent_id": arch, "title": "it"})["id"].(string)
+	dd := call(t, cs, "create_node", map[string]any{"kind": "detail_design", "parent_id": arch, "title": "dd"})["id"].(string)
+	ut := call(t, cs, "create_node", map[string]any{"kind": "unit_test", "parent_id": dd, "title": "ut"})["id"].(string)
+	prereq := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "prereq"})["id"].(string)
+	call(t, cs, "link_dependency", map[string]any{"node_id": story, "target_id": prereq})
+
+	// Full tree read carries the bodies.
+	tree := call(t, cs, "get_tree", map[string]any{"story_id": story, "full": true})
+	blob, _ := json.Marshal(tree)
+	for _, want := range []string{"story body text", "at body", "arch body"} {
+		if !strings.Contains(string(blob), want) {
+			t.Fatalf("full tree missing %q", want)
+		}
+	}
+	hashes := map[string]any{}
+	var walk func(n map[string]any)
+	walk = func(n map[string]any) {
+		hashes[n["id"].(string)] = n["content_hash"]
+		if cs, ok := n["children"].([]any); ok {
+			for _, c := range cs {
+				walk(c.(map[string]any))
+			}
+		}
+	}
+	walk(tree["story"].(map[string]any))
+
+	// Partial batch: rejected, everything named, nothing approved.
+	partial := map[string]any{story: hashes[story], at: hashes[at], "US-77": "x"}
+	callErr(t, cs, "approve_tree", map[string]any{"story_id": story, "hashes": partial},
+		"nothing was approved", "missing hash for "+arch, "missing hash for "+it,
+		"missing hash for "+dd, "missing hash for "+ut, "US-77, which is not part of")
+	if n := call(t, cs, "get_node", map[string]any{"id": story}); n["fresh"].(bool) {
+		t.Fatal("nothing may be approved after a rejected batch")
+	}
+
+	// Edit invalidates a submitted hash: batch rejected with the mismatch.
+	call(t, cs, "update_node", map[string]any{"id": dd, "body": "changed"})
+	callErr(t, cs, "approve_tree", map[string]any{"story_id": story, "hashes": hashes},
+		"hash mismatch for "+dd)
+
+	// Fresh read, clean batch (sequencing link needs no hash), refine passes.
+	tree = call(t, cs, "get_tree", map[string]any{"story_id": story, "full": true})
+	hashes = map[string]any{}
+	walk(tree["story"].(map[string]any))
+	call(t, cs, "approve_tree", map[string]any{"story_id": story, "hashes": hashes})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	if st, _ := nodeStatus(t, cs, story); st != "refined" {
+		t.Fatalf("status = %s, want refined", st)
+	}
+}
