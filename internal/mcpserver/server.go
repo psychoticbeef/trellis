@@ -82,6 +82,12 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "search_specs",
 		Description: "Full-text search over spec titles, bodies and acceptance criteria (case-insensitive). Returns id, kind, owning story, title and a matching snippet per hit. Use this to find relevant context before designing or implementing."},
 		s.searchSpecs)
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_paths",
+		Description: "Declare which repo-relative files/folders realize a story (metadata, does not invalidate approvals; empty list clears). finish verifies the paths exist."},
+		s.setPaths)
+	mcp.AddTool(srv, &mcp.Tool{Name: "specs_for_path",
+		Description: "Reverse lookup: stories whose declared paths cover a file (exact or folder prefix). Check this before changing a file to find the specs it belongs to."},
+		s.specsForPath)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
 		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
@@ -149,6 +155,15 @@ type transitionIn struct {
 
 type searchIn struct {
 	Query string `json:"query"`
+}
+
+type setPathsIn struct {
+	StoryID string   `json:"story_id"`
+	Paths   []string `json:"paths" jsonschema:"repo-relative files or folders; empty list clears"`
+}
+
+type pathIn struct {
+	Path string `json:"path" jsonschema:"repo-relative file path"`
 }
 
 type okOut struct {
@@ -249,6 +264,19 @@ func (s *Server) unlinkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) 
 func (s *Server) searchSpecs(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, []core.SearchHit, error) {
 	hits, err := s.engine.Search(in.Query)
 	return nil, hits, err
+}
+
+func (s *Server) setPaths(_ context.Context, _ *mcp.CallToolRequest, in setPathsIn) (*mcp.CallToolResult, okOut, error) {
+	cleaned, err := s.engine.SetPaths(in.StoryID, in.Paths)
+	if err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: fmt.Sprintf("%s now declares %d path(s): %v", in.StoryID, len(cleaned), cleaned)}, nil
+}
+
+func (s *Server) specsForPath(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, []core.StorySummary, error) {
+	stories, err := s.engine.StoriesForPath(in.Path)
+	return nil, stories, err
 }
 
 func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {

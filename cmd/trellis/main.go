@@ -35,6 +35,7 @@ Usage:
   trellis tree <project-id> <story-id>                         print a story's spec tree
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
+  trellis affected <project-id> <path>                         stories declaring a file/folder
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -67,6 +68,8 @@ func run(args []string) error {
 		return cmdLog(rest)
 	case "prune":
 		return cmdPrune(rest)
+	case "affected":
+		return cmdAffected(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -316,6 +319,25 @@ func cmdLog(args []string) error {
 	for i := len(events) - 1; i >= 0; i-- {
 		e := events[i]
 		fmt.Printf("%s  %-15s %-8s %s\n", e.TS, e.Action, e.NodeID, e.Detail)
+	}
+	return nil
+}
+
+func cmdAffected(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: trellis affected <project-id> <path>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	stories, err := e.StoriesForPath(args[1])
+	if err != nil {
+		return err
+	}
+	for _, s := range stories {
+		fmt.Printf("%-6s %-12s %s\n", s.ID, s.Status, s.Title)
 	}
 	return nil
 }

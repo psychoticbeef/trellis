@@ -168,6 +168,7 @@ type TreeNode struct {
 	Fresh    bool       `json:"fresh"`
 	Problems []string   `json:"problems,omitempty"`
 	Covers   []string   `json:"covers,omitempty"`
+	Paths    []string   `json:"paths,omitempty"`
 	Deps     []DepInfo  `json:"depends_on,omitempty"`
 	Children []TreeNode `json:"children,omitempty"`
 }
@@ -242,7 +243,7 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 	if err != nil {
 		return TreeNode{}, err
 	}
-	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers}
+	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers, Paths: n.Paths}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {
 		return TreeNode{}, err
@@ -283,6 +284,7 @@ type NodeReport struct {
 	Title    string    `json:"title"`
 	Body     string    `json:"body"`
 	Covers   []string  `json:"covers,omitempty"`
+	Paths    []string  `json:"paths,omitempty"`
 	Status   string    `json:"status,omitempty"`
 	Hash     string    `json:"content_hash"`
 	Fresh    bool      `json:"fresh"`
@@ -316,7 +318,7 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 	}
 	r := NodeReport{
 		ID: n.ID, Kind: string(n.Kind), ParentID: n.ParentID, Title: n.Title, Body: n.Body,
-		Covers: n.Covers, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+		Covers: n.Covers, Paths: n.Paths, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
 	}
 	deps, err := e.st.ListDeps(e.pid(), n.ID)
 	if err != nil {

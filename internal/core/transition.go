@@ -151,6 +151,9 @@ func (e *Engine) finish(story model.Node) (string, error) {
 			branch, e.Project.BaseBranch, e.Project.BaseBranch, branch)
 	}
 
+	if missing := e.missingPaths(story); len(missing) > 0 {
+		return "", fmt.Errorf("finish blocked: declared paths missing in repo: %s — fix the code layout or the story's paths", strings.Join(missing, ", "))
+	}
 	if e.Project.LintCmd != "" {
 		if out, err := runShell(e.Project.RepoPath, e.Project.LintCmd); err != nil {
 			return "", fmt.Errorf("finish blocked: lint failed (%s):\n%s", e.Project.LintCmd, tail(out, 40))
