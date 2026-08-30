@@ -161,7 +161,9 @@ func cmdInit(args []string) error {
 		return err
 	}
 	fmt.Printf("project created: %s\n\nscaffolding %s:\n", id, repoAbs)
-	for _, msg := range scaffold(repoAbs, id) {
+	msgs, createdFiles := scaffold(repoAbs, id)
+	msgs = append(msgs, commitScaffold(repoAbs, createdFiles))
+	for _, msg := range msgs {
 		fmt.Println("  -", msg)
 	}
 	fmt.Printf(`
