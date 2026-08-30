@@ -12,7 +12,7 @@ import (
 // target (sequencing links are exempt) — the read-proof contract stays
 // hash-per-content, at tree granularity. Validation is exhaustive and the
 // batch applies all-or-nothing.
-func (e *Engine) ApproveTree(storyID string, hashes, depHashes map[string]string) error {
+func (e *Engine) approveTreeUnlocked(storyID string, hashes, depHashes map[string]string) error {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return err
@@ -105,4 +105,8 @@ func (e *Engine) ApproveTree(storyID string, hashes, depHashes map[string]string
 	}
 	e.st.AppendEvent(e.pid(), "approve_tree", storyID, fmt.Sprintf("%d nodes approved", len(apply)))
 	return nil
+}
+
+func (e *Engine) ApproveTree(storyID string, hashes, depHashes map[string]string) error {
+	return e.locked(func() error { return e.approveTreeUnlocked(storyID, hashes, depHashes) })
 }

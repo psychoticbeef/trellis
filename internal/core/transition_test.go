@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"trellis/internal/core"
 	"trellis/internal/model"
 	"trellis/internal/store"
@@ -943,4 +945,109 @@ func TestBatchApprovalIntegration_IT_26(t *testing.T) {
 	if _, err := e.Transition(tr.story, "refine"); err != nil {
 		t.Fatalf("refine after batch: %v", err)
 	}
+}
+
+// TestConcurrencyIntegration_IT_27 proves IT-27 (US-27 "Atomic mutations"):
+// transition double-fire yields one winner, racing arch creation hits the
+// database invariant, reads answer while the lock is held.
+func TestConcurrencyIntegration_IT_27(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	open2 := func() (*core.Engine, *store.Store) {
+		t.Helper()
+		st, err := store.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		e, err := core.NewEngine(st, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e, st
+	}
+	st1, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st1.Close() })
+	if err := st1.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e1, err := core.NewEngine(st1, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, _ := open2()
+
+	tr := fullTree(t, e1)
+
+	// Double-fire refine from two engines: exactly one winner.
+	var wg sync.WaitGroup
+	results := make([]error, 2)
+	for i, e := range []*core.Engine{e1, e2} {
+		wg.Add(1)
+		go func(i int, e *core.Engine) {
+			defer wg.Done()
+			_, results[i] = e.Transition(tr.story, "refine")
+		}(i, e)
+	}
+	wg.Wait()
+	oks, blocks := 0, 0
+	for _, err := range results {
+		if err == nil {
+			oks++
+		} else if strings.Contains(err.Error(), `refine requires "todo"`) {
+			blocks++
+		} else {
+			t.Fatalf("unexpected race error: %v", err)
+		}
+	}
+	if oks != 1 || blocks != 1 {
+		t.Fatalf("double-fire: %d ok, %d blocked; want 1/1 (%v)", oks, blocks, results)
+	}
+
+	// Racing arch creation on a fresh story: the DB invariant holds.
+	s2 := mustCreate(t, e1, model.KindStory, "", "racy", nil)
+	arches := make([]error, 2)
+	for i, e := range []*core.Engine{e1, e2} {
+		wg.Add(1)
+		go func(i int, e *core.Engine) {
+			defer wg.Done()
+			_, arches[i] = e.CreateNode(model.KindArch, s2.ID, "as", "", nil)
+		}(i, e)
+	}
+	wg.Wait()
+	archOks := 0
+	for _, err := range arches {
+		if err == nil {
+			archOks++
+		}
+	}
+	if archOks != 1 {
+		t.Fatalf("arch race produced %d arch specs: %v", archOks, arches)
+	}
+	children, _ := st1.ListChildren("p1", s2.ID)
+	if len(children) != 1 {
+		t.Fatalf("story has %d arch children, want 1", len(children))
+	}
+
+	// Reads answer while the lock is held.
+	unlock, err := st1.LockProject("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e2.Overview()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("read during held lock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read blocked by the mutation lock")
+	}
+	unlock()
 }

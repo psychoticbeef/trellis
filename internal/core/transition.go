@@ -18,7 +18,7 @@ import (
 //
 // Any edit inside the tree automatically drops refined/in_progress back to
 // todo (see downgradeAffected). There is no manual way to set a status.
-func (e *Engine) Transition(storyID, action string) (string, error) {
+func (e *Engine) transitionUnlocked(storyID, action string) (string, error) {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return "", err
@@ -285,7 +285,7 @@ func tail(s string, lines int) string {
 
 // Prune deletes the whole tree of a done story. Truth lives in code and tests
 // after finish; trellis keeps no war stories.
-func (e *Engine) Prune(storyID string) error {
+func (e *Engine) pruneUnlocked(storyID string) error {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return err
@@ -328,4 +328,18 @@ func (e *Engine) Prune(storyID string) error {
 	}
 	e.st.AppendEvent(e.pid(), "prune", storyID, fmt.Sprintf("%d nodes deleted", len(nodes)))
 	return nil
+}
+
+func (e *Engine) Transition(storyID, action string) (string, error) {
+	var out string
+	err := e.locked(func() error {
+		var err error
+		out, err = e.transitionUnlocked(storyID, action)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) Prune(storyID string) error {
+	return e.locked(func() error { return e.pruneUnlocked(storyID) })
 }

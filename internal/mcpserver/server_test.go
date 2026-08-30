@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -617,4 +618,132 @@ func TestBatchApprovalAcceptance_AT_30(t *testing.T) {
 	if st, _ := nodeStatus(t, cs, story); st != "refined" {
 		t.Fatalf("status = %s, want refined", st)
 	}
+}
+
+// clientOnPath builds an MCP session over a store opened on an existing
+// database file — the shape two concurrent agent sessions have in reality.
+func clientOnPath(t *testing.T, path, projectID string) *mcp.ClientSession {
+	t.Helper()
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	engine, err := core.NewEngine(st, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastEngine = engine
+	ct, srvT := mcp.NewInMemoryTransports()
+	srv := mcpserver.New(engine, "test")
+	ctx := context.Background()
+	srvSession, err := srv.Connect(ctx, srvT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srvSession.Close() })
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	return cs
+}
+
+// TestConcurrencyAcceptance_AT_31 proves AT-31 (US-27 "Atomic mutations")
+// through two MCP sessions on one database: transition double-fire with one
+// winner and single side effects, arch race hitting the invariant, reads
+// while a mutation lock is held.
+func TestConcurrencyAcceptance_AT_31(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	seed, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	seed.Close()
+	cs1 := clientOnPath(t, path, "p1")
+	cs2 := clientOnPath(t, path, "p1")
+
+	story, _, _, _, _, _ := fullTreeMCP(t, cs1)
+
+	// Double-fire refine from two sessions.
+	type outcome struct {
+		isErr bool
+		text  string
+	}
+	res := make(chan outcome, 2)
+	for _, cs := range []*mcp.ClientSession{cs1, cs2} {
+		go func(cs *mcp.ClientSession) {
+			r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "transition",
+				Arguments: map[string]any{"story_id": story, "action": "refine"}})
+			if err != nil {
+				res <- outcome{true, err.Error()}
+				return
+			}
+			res <- outcome{r.IsError, text(r)}
+		}(cs)
+	}
+	var oks, blocks int
+	for i := 0; i < 2; i++ {
+		o := <-res
+		switch {
+		case !o.isErr:
+			oks++
+		case strings.Contains(o.text, `refine requires "todo"`):
+			blocks++
+		default:
+			t.Fatalf("unexpected race outcome: %s", o.text)
+		}
+	}
+	if oks != 1 || blocks != 1 {
+		t.Fatalf("double-fire: %d ok / %d blocked, want 1/1", oks, blocks)
+	}
+	if st, _ := nodeStatus(t, cs1, story); st != "refined" {
+		t.Fatalf("status = %s, want refined exactly once", st)
+	}
+
+	// Arch race on a fresh story: exactly one arch spec survives.
+	s2 := call(t, cs1, "create_node", map[string]any{"kind": "story", "title": "racy"})["id"].(string)
+	arch := make(chan bool, 2)
+	for _, cs := range []*mcp.ClientSession{cs1, cs2} {
+		go func(cs *mcp.ClientSession) {
+			r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_node",
+				Arguments: map[string]any{"kind": "arch", "parent_id": s2, "title": "as"}})
+			arch <- err == nil && !r.IsError
+		}(cs)
+	}
+	archOks := 0
+	for i := 0; i < 2; i++ {
+		if <-arch {
+			archOks++
+		}
+	}
+	if archOks != 1 {
+		t.Fatalf("arch race produced %d arch specs, want 1", archOks)
+	}
+
+	// Reads answer while a mutation lock is held elsewhere.
+	st2, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	unlock, err := st2.LockProject("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		call(t, cs1, "get_overview", map[string]any{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("get_overview blocked by the mutation lock")
+	}
+	unlock()
 }

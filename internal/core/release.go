@@ -52,7 +52,7 @@ func featuresMarkdown(name, description string, stories []model.Node, terms []st
 // Release merges the base branch into the release branch with a feature-list
 // merge message and regenerates FEATURES.md there. A human act: exposed only
 // on the CLI, never via MCP.
-func (e *Engine) Release() (string, error) {
+func (e *Engine) releaseUnlocked() (string, error) {
 	g, err := e.git()
 	if err != nil {
 		return "", err
@@ -165,4 +165,14 @@ func (e *Engine) Release() (string, error) {
 	restore()
 	e.st.AppendEvent(e.pid(), "release", "", fmt.Sprintf("%d feature(s) -> %s", len(features), rel))
 	return fmt.Sprintf("released %d feature(s) to %s:\n- %s", len(features), rel, strings.Join(features, "\n- ")), nil
+}
+
+func (e *Engine) Release() (string, error) {
+	var out string
+	err := e.locked(func() error {
+		var err error
+		out, err = e.releaseUnlocked()
+		return err
+	})
+	return out, err
 }
