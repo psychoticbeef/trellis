@@ -55,12 +55,13 @@ func cleanRepoPath(p string) (string, error) {
 	return c, nil
 }
 
-// missingPaths returns the declared paths of a story that do not exist in the
-// repo — the finish gate over spec-to-code pointers.
-func (e *Engine) missingPaths(story model.Node) []string {
+// missingPathsIn returns the declared paths of a story that do not exist
+// under root — the finish gate over spec-to-code pointers, evaluated inside
+// the story worktree.
+func (e *Engine) missingPathsIn(story model.Node, root string) []string {
 	var missing []string
 	for _, p := range story.Paths {
-		if _, err := os.Stat(filepath.Join(e.Project.RepoPath, filepath.FromSlash(p))); err != nil {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
 			missing = append(missing, p)
 		}
 	}

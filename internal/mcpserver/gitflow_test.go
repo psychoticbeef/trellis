@@ -46,13 +46,17 @@ func reportSrc(cases map[string]string) string {
 	return b.String()
 }
 
-func setReport(t *testing.T, repo string, cases map[string]string) {
+func setReport(t *testing.T, dir string, cases map[string]string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(reportSrc(cases)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "report-src.xml"), []byte(reportSrc(cases)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", ".")
-	gitRun(t, repo, "commit", "-m", "update report")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "update report")
+}
+
+func wtOf(repo, story string) string {
+	return filepath.Join(repo, ".trellis-worktrees", story)
 }
 
 // TestGitFlowAcceptance_AT_6 proves AT-6 (US-6 "Git flow and test
@@ -63,7 +67,7 @@ func setReport(t *testing.T, repo string, cases map[string]string) {
 func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -76,18 +80,10 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	story, at, _, it, _, ut := fullTreeMCP(t, cs)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 
-	// Dirty worktree blocks start.
-	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "start"},
-		"start blocked", "worktree not clean")
-	os.Remove(filepath.Join(repo, "dirty.txt"))
-
 	// Missing base branch blocks start (separate repo without develop).
 	repo2 := t.TempDir()
 	gitRun(t, repo2, "init", "-b", "main")
-	if err := os.WriteFile(filepath.Join(repo2, "a.txt"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo2, ".gitignore"), []byte(".trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo2, "add", ".")
@@ -98,10 +94,14 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	callErr(t, cs2, "transition", map[string]any{"story_id": story2, "action": "start"},
 		"start blocked", `base branch "develop" does not exist`)
 
-	// Happy start: feature branch created from base and checked out.
+	// Happy start: story worktree on the feature branch, main stays on base.
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+story {
-		t.Fatalf("on %s, want feature/%s", got, story)
+	wt := wtOf(repo, story)
+	if got := gitRun(t, wt, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+story {
+		t.Fatalf("worktree on %s, want feature/%s", got, story)
+	}
+	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("main worktree on %s, want develop", got)
 	}
 
 	// Absent report: an error, never an empty pass.
@@ -109,47 +109,45 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 		"finish blocked", "no junit reports match")
 
 	// Missing spec evidence: every uncovered spec is named.
-	setReport(t, repo, map[string]string{at: ""})
+	setReport(t, wt, map[string]string{at: ""})
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		"test evidence incomplete", it+": no test references", ut+": no test references")
 
 	// Failing and skipped tests count against their spec.
-	setReport(t, repo, map[string]string{at: "", it: "failure", ut: "skipped"})
+	setReport(t, wt, map[string]string{at: "", it: "failure", ut: "skipped"})
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		it+": test", "failed", ut+": test", "skipped")
 
 	// An advanced base — even a conflicting one — is caught by the up-to-date
 	// gate before any merge is attempted (US-9); develop is never touched.
-	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
-	gitRun(t, repo, "checkout", "develop")
+	setReport(t, wt, map[string]string{at: "", it: "", ut: ""})
 	if err := os.WriteFile(filepath.Join(repo, "clash.txt"), []byte("develop"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "conflicting base work")
 	baseSHA := gitRun(t, repo, "rev-parse", "develop")
-	gitRun(t, repo, "checkout", "feature/"+story)
-	if err := os.WriteFile(filepath.Join(repo, "clash.txt"), []byte("feature"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wt, "clash.txt"), []byte("feature"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", ".")
-	gitRun(t, repo, "commit", "-m", "conflicting feature work")
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "conflicting feature work")
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		"finish blocked", "feature/"+story+" is behind develop")
 	if got := gitRun(t, repo, "rev-parse", "develop"); got != baseSHA {
 		t.Fatal("develop moved although finish was blocked")
 	}
 
-	// Catch up on the feature branch, resolving the conflict there — the
+	// Catch up inside the story worktree, resolving the conflict there — the
 	// merge into develop afterwards is conflict-free by construction.
 	cmd := exec.Command("git", "merge", "develop", "-m", "catch up")
-	cmd.Dir = repo
+	cmd.Dir = wt
 	_ = cmd.Run() // conflict expected
-	if err := os.WriteFile(filepath.Join(repo, "clash.txt"), []byte("resolved"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wt, "clash.txt"), []byte("resolved"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", ".")
-	gitRun(t, repo, "commit", "-m", "resolve conflict on feature branch")
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "resolve conflict on feature branch")
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
 	st, _ := nodeStatus(t, cs, story)
 	if st != "done" {
@@ -172,7 +170,7 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 func TestLivingDoneTreeAcceptance_AT_10(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -184,7 +182,7 @@ func TestLivingDoneTreeAcceptance_AT_10(t *testing.T) {
 	story, at, arch, it, dd, ut := fullTreeMCP(t, cs)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	setReport(t, wtOf(repo, story), map[string]string{at: "", it: "", ut: ""})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
 
 	// Edits on the done tree succeed; stale markers appear; status stays done.
@@ -226,7 +224,7 @@ func TestLivingDoneTreeAcceptance_AT_10(t *testing.T) {
 func TestUpToDateMergeGateAcceptance_AT_11(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -238,20 +236,19 @@ func TestUpToDateMergeGateAcceptance_AT_11(t *testing.T) {
 	story, at, _, it, _, ut := fullTreeMCP(t, cs)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	wt := wtOf(repo, story)
+	setReport(t, wt, map[string]string{at: "", it: "", ut: ""})
 
-	gitRun(t, repo, "checkout", "develop")
 	if err := os.WriteFile(filepath.Join(repo, "unrelated.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "base moved")
-	gitRun(t, repo, "checkout", "feature/"+story)
 
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		"finish blocked", "feature/"+story+" is behind develop", "merge or rebase develop into")
 
-	gitRun(t, repo, "merge", "develop", "-m", "catch up")
+	gitRun(t, wt, "merge", "develop", "-m", "catch up")
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
 	if st, _ := nodeStatus(t, cs, story); st != "done" {
 		t.Fatalf("status = %s, want done", st)
@@ -264,7 +261,7 @@ func TestUpToDateMergeGateAcceptance_AT_11(t *testing.T) {
 func TestAbortAcceptance_AT_12(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -273,28 +270,29 @@ func TestAbortAcceptance_AT_12(t *testing.T) {
 	story, _, _, _, _, _ := fullTreeMCP(t, cs)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	wt := wtOf(repo, story)
 
-	if err := os.WriteFile(filepath.Join(repo, "wip.txt"), []byte("w"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wt, "wip.txt"), []byte("w"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repo, "add", ".")
-	gitRun(t, repo, "commit", "-m", "work")
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "work")
 
-	// Dirty worktree blocks abort.
-	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644); err != nil {
+	// Dirty story worktree blocks abort.
+	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"},
 		"abort blocked", "never silently destroyed")
-	os.Remove(filepath.Join(repo, "dirty.txt"))
+	os.Remove(filepath.Join(wt, "dirty.txt"))
 
-	// Clean abort: branch gone, base checked out, story refined.
+	// Clean abort: worktree and branch gone, story refined, main untouched.
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"})
 	if st, _ := nodeStatus(t, cs, story); st != "refined" {
 		t.Fatalf("status = %s, want refined", st)
 	}
-	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
-		t.Fatalf("on %s, want develop", got)
+	if _, err := os.Stat(wt); err == nil {
+		t.Fatal("story worktree still exists after abort")
 	}
 	if out := gitRun(t, repo, "branch", "--list", "feature/"+story); out != "" {
 		t.Fatalf("feature branch still exists: %s", out)
@@ -304,8 +302,8 @@ func TestAbortAcceptance_AT_12(t *testing.T) {
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"},
 		"abort blocked", `abort requires "in_progress"`)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	if _, err := os.Stat(filepath.Join(repo, "wip.txt")); err == nil {
-		t.Fatal("discarded work survived into the fresh branch")
+	if _, err := os.Stat(filepath.Join(wtOf(repo, story), "wip.txt")); err == nil {
+		t.Fatal("discarded work survived into the fresh worktree")
 	}
 }
 
@@ -315,7 +313,7 @@ func TestAbortAcceptance_AT_12(t *testing.T) {
 func TestSequencingAcceptance_AT_13(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -341,7 +339,7 @@ func TestSequencingAcceptance_AT_13(t *testing.T) {
 	// Drive the prerequisite to done, then start proceeds.
 	call(t, cs, "transition", map[string]any{"story_id": a, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": a, "action": "start"})
-	setReport(t, repo, map[string]string{atA: "", itA: "", utA: ""})
+	setReport(t, wtOf(repo, a), map[string]string{atA: "", itA: "", utA: ""})
 	call(t, cs, "transition", map[string]any{"story_id": a, "action": "finish"})
 	call(t, cs, "transition", map[string]any{"story_id": b, "action": "start"})
 	if st, _ := nodeStatus(t, cs, b); st != "in_progress" {
@@ -355,7 +353,7 @@ func TestSequencingAcceptance_AT_13(t *testing.T) {
 func TestPathPointerAcceptance_AT_15(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(repo, "pkg/auth"), 0o755); err != nil {
@@ -381,7 +379,7 @@ func TestPathPointerAcceptance_AT_15(t *testing.T) {
 
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	setReport(t, wtOf(repo, story), map[string]string{at: "", it: "", ut: ""})
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		"declared paths missing in repo", "missing/file.go")
 
@@ -404,7 +402,7 @@ func TestPathPointerAcceptance_AT_15(t *testing.T) {
 func TestEvidenceAcceptance_AT_17(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -416,7 +414,7 @@ func TestEvidenceAcceptance_AT_17(t *testing.T) {
 	story, at, _, it, _, ut := fullTreeMCP(t, cs)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
-	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	setReport(t, wtOf(repo, story), map[string]string{at: "", it: "", ut: ""})
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
 
 	n := call(t, cs, "get_node", map[string]any{"id": ut})
@@ -437,4 +435,75 @@ func TestEvidenceAcceptance_AT_17(t *testing.T) {
 	if !strings.Contains(string(blob), `"evidence"`) {
 		t.Fatalf("get_tree missing evidence blocks:\n%s", blob)
 	}
+}
+
+// TestWorktreeAcceptance_AT_20 proves AT-20 (US-17 "Worktree isolation")
+// through MCP: parallel starts with separate worktrees and an untouched main
+// worktree, finish gating inside the worktree with cleanup, abort cleanup,
+// and the ignore guard.
+func TestWorktreeAcceptance_AT_20(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+
+	a, atA, _, itA, _, utA := fullTreeMCP(t, cs)
+	b, _, _, _, _, _ := fullTreeMCP(t, cs)
+	for _, s := range []string{a, b} {
+		call(t, cs, "transition", map[string]any{"story_id": s, "action": "refine"})
+		msg := call(t, cs, "transition", map[string]any{"story_id": s, "action": "start"})["message"].(string)
+		if !strings.Contains(msg, wtOf(repo, s)) {
+			t.Fatalf("start message must name the worktree path, got %q", msg)
+		}
+	}
+
+	// Parallel by construction: two worktrees, main untouched on base.
+	for _, s := range []string{a, b} {
+		if got := gitRun(t, wtOf(repo, s), "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+s {
+			t.Fatalf("worktree of %s on %s", s, got)
+		}
+	}
+	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("main worktree on %s, want develop", got)
+	}
+
+	// Finish story A: gates ran in its worktree, merge landed on base, cleanup.
+	setReport(t, wtOf(repo, a), map[string]string{atA: "", itA: "", utA: ""})
+	call(t, cs, "transition", map[string]any{"story_id": a, "action": "finish"})
+	if _, err := os.Stat(wtOf(repo, a)); err == nil {
+		t.Fatal("worktree of finished story still exists")
+	}
+	if log := gitRun(t, repo, "log", "--merges", "--oneline", "develop"); !strings.Contains(log, "Merge feature/"+a) {
+		t.Fatalf("merge missing on develop:\n%s", log)
+	}
+
+	// Abort story B: worktree and branch gone, story refined.
+	call(t, cs, "transition", map[string]any{"story_id": b, "action": "abort"})
+	if _, err := os.Stat(wtOf(repo, b)); err == nil {
+		t.Fatal("worktree of aborted story still exists")
+	}
+	if st, _ := nodeStatus(t, cs, b); st != "refined" {
+		t.Fatalf("aborted story status = %s, want refined", st)
+	}
+
+	// Ignore guard: a repo without the .gitignore entry blocks start.
+	repo2 := t.TempDir()
+	gitRun(t, repo2, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo2, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo2, "add", ".")
+	gitRun(t, repo2, "commit", "-m", "initial")
+	cs2 := clientFor(t, store.Project{ID: "p2", Name: "t2", RepoPath: repo2, BaseBranch: "develop"})
+	s2, _, _, _, _, _ := fullTreeMCP(t, cs2)
+	call(t, cs2, "transition", map[string]any{"story_id": s2, "action": "refine"})
+	callErr(t, cs2, "transition", map[string]any{"story_id": s2, "action": "start"},
+		"start blocked", "not git-ignored", ".gitignore")
 }

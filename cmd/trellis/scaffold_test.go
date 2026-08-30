@@ -185,3 +185,48 @@ func TestScaffoldAcceptance_AT_19(t *testing.T) {
 		t.Fatalf("green test gate: %v", err)
 	}
 }
+
+// TestBranchGateAcceptance_AT_21 proves AT-21 (US-17 "Worktree isolation")
+// and the branch-gate part of UT-18: trellis gate branch fails on the base
+// branch, passes on a feature branch, and init installs it in pre-commit.
+func TestBranchGateAcceptance_AT_21(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// gate branch runs in the current directory; on develop it must fail.
+	wd, _ := os.Getwd()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	if err := run([]string{"gate", "branch", "--project", "p1"}); err == nil ||
+		!strings.Contains(err.Error(), "direct commits on") {
+		t.Fatalf("branch gate on base: want rejection, got %v", err)
+	}
+	gitRun(t, repo, "checkout", "-b", "feature/X")
+	if err := run([]string{"gate", "branch", "--project", "p1"}); err != nil {
+		t.Fatalf("branch gate on feature branch: %v", err)
+	}
+	gitRun(t, repo, "checkout", "develop")
+
+	// The scaffolded pre-commit hook contains the branch gate.
+	scaffold(repo, "p1")
+	hook, _ := os.ReadFile(filepath.Join(repo, ".git/hooks/pre-commit"))
+	if !strings.Contains(string(hook), "trellis gate branch --project p1") {
+		t.Fatalf("pre-commit hook missing branch gate:\n%s", hook)
+	}
+}

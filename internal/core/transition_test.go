@@ -35,6 +35,10 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+func wtPath(repo, story string) string {
+	return filepath.Join(repo, ".trellis-worktrees", story)
+}
+
 func reportXML(passing ...string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0"?><testsuite name="all">`)
@@ -49,7 +53,7 @@ func TestGitFlow_IT_6(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1")) // UT-1 missing on purpose
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -71,27 +75,31 @@ func TestGitFlow_IT_6(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// start: creates and checks out the feature branch.
+	// start: creates a story worktree, main worktree stays on develop.
 	if _, err := e.Transition(tr.story, "start"); err != nil {
 		t.Fatal(err)
 	}
-	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+tr.story {
-		t.Fatalf("on branch %s, want feature/%s", got, tr.story)
+	wt := wtPath(repo, tr.story)
+	if got := git(t, wt, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+tr.story {
+		t.Fatalf("worktree on branch %s, want feature/%s", got, tr.story)
+	}
+	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("main worktree on %s, want develop", got)
 	}
 
-	// Simulate implementation work.
-	writeFile(t, filepath.Join(repo, "impl.txt"), "code")
-	git(t, repo, "add", ".")
-	git(t, repo, "commit", "-m", "implement")
+	// Simulate implementation work inside the worktree.
+	writeFile(t, filepath.Join(wt, "impl.txt"), "code")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "implement")
 
 	// finish: blocked, the unit test spec has no test evidence.
 	_, err := e.Transition(tr.story, "finish")
 	wantErr(t, err, "test evidence incomplete", tr.ut+": no test references")
 
 	// Add the missing test, commit, finish again.
-	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
-	git(t, repo, "add", ".")
-	git(t, repo, "commit", "-m", "add unit test")
+	writeFile(t, filepath.Join(wt, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "add unit test")
 	if _, err := e.Transition(tr.story, "finish"); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
@@ -104,6 +112,9 @@ func TestGitFlow_IT_6(t *testing.T) {
 	}
 	if out := git(t, repo, "branch", "--list", "feature/"+tr.story); out != "" {
 		t.Fatalf("feature branch still exists: %s", out)
+	}
+	if _, err := os.Stat(wt); err == nil {
+		t.Fatal("story worktree still exists after finish")
 	}
 	if log := git(t, repo, "log", "--oneline", "develop"); !strings.Contains(log, "Merge feature/"+tr.story) {
 		t.Fatalf("develop log missing merge commit:\n%s", log)
@@ -136,13 +147,15 @@ func TestStartRequiresCleanWorktreeAndBase_IT_6(t *testing.T) {
 	if _, err := e.Transition(tr.story, "refine"); err != nil {
 		t.Fatal(err)
 	}
+	// Ignore guard fires first: .trellis-worktrees must be git-ignored.
 	_, err := e.Transition(tr.story, "start")
-	wantErr(t, err, `base branch "develop" does not exist`)
+	wantErr(t, err, "is not git-ignored", ".gitignore")
 
-	git(t, repo, "branch", "develop")
-	writeFile(t, filepath.Join(repo, "dirty.txt"), "uncommitted")
+	writeFile(t, filepath.Join(repo, ".gitignore"), ".trellis-worktrees/\n")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "ignore worktrees")
 	_, err = e.Transition(tr.story, "start")
-	wantErr(t, err, "worktree not clean")
+	wantErr(t, err, `base branch "develop" does not exist`)
 }
 
 // TestTransitionGuardMatrix_IT_5 proves IT-5 (US-5): every illegal
@@ -152,7 +165,7 @@ func TestTransitionGuardMatrix_IT_5(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -229,7 +242,7 @@ func TestLivingDoneTreeIntegration_IT_8(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -312,7 +325,7 @@ func TestMergeGateIntegration_IT_9(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -333,19 +346,18 @@ func TestMergeGateIntegration_IT_9(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Advance the base with an unrelated commit while the feature is active.
-	git(t, repo, "checkout", "develop")
+	// Advance the base with an unrelated commit while the feature is active —
+	// the main worktree sits on develop, so this needs no branch switching.
 	writeFile(t, filepath.Join(repo, "unrelated.txt"), "x")
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "base moved")
-	git(t, repo, "checkout", "feature/"+tr.story)
 
 	_, err := e.Transition(tr.story, "finish")
 	wantErr(t, err, "finish blocked", "feature/"+tr.story+" is behind develop",
 		"merge or rebase develop into feature/"+tr.story)
 
-	// Catch up, then the same finish passes and merges.
-	git(t, repo, "merge", "develop", "-m", "catch up")
+	// Catch up inside the story worktree, then the same finish passes.
+	git(t, wtPath(repo, tr.story), "merge", "develop", "-m", "catch up")
 	if _, err := e.Transition(tr.story, "finish"); err != nil {
 		t.Fatalf("finish after catch-up: %v", err)
 	}
@@ -361,7 +373,7 @@ func TestAbortIntegration_IT_10(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
 	p := e.Project
@@ -384,34 +396,38 @@ func TestAbortIntegration_IT_10(t *testing.T) {
 	if _, err := e.Transition(tr.story, "start"); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(repo, "doomed.txt"), "wrong approach")
-	git(t, repo, "add", ".")
-	git(t, repo, "commit", "-m", "doomed work")
+	wt := wtPath(repo, tr.story)
+	writeFile(t, filepath.Join(wt, "doomed.txt"), "wrong approach")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "doomed work")
 
-	// Dirty worktree blocks abort.
-	writeFile(t, filepath.Join(repo, "dirty.txt"), "x")
+	// Dirty story worktree blocks abort.
+	writeFile(t, filepath.Join(wt, "dirty.txt"), "x")
 	_, err = e.Transition(tr.story, "abort")
 	wantErr(t, err, "abort blocked", "never silently destroyed")
-	if err := os.Remove(filepath.Join(repo, "dirty.txt")); err != nil {
+	if err := os.Remove(filepath.Join(wt, "dirty.txt")); err != nil {
 		t.Fatal(err)
 	}
 
-	// Abort: branch discarded, base checked out, refined again.
+	// Abort: worktree and branch discarded, refined again, main untouched.
 	if _, err := e.Transition(tr.story, "abort"); err != nil {
 		t.Fatal(err)
 	}
 	if got := status(t, e, tr.story); got != "refined" {
 		t.Fatalf("status = %s, want refined", got)
 	}
-	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
-		t.Fatalf("on %s, want develop", got)
+	if _, err := os.Stat(wt); err == nil {
+		t.Fatal("story worktree still exists after abort")
+	}
+	if out := git(t, repo, "branch", "--list", "feature/"+tr.story); out != "" {
+		t.Fatalf("feature branch still exists: %s", out)
 	}
 
-	// Restart creates a fresh branch from base — the doomed work is gone.
+	// Restart creates a fresh worktree from base — the doomed work is gone.
 	if _, err := e.Transition(tr.story, "start"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, "doomed.txt")); err == nil {
+	if _, err := os.Stat(filepath.Join(wtPath(repo, tr.story), "doomed.txt")); err == nil {
 		t.Fatal("doomed work survived the abort")
 	}
 }
@@ -423,7 +439,7 @@ func TestSequencingIntegration_IT_11(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -472,7 +488,7 @@ func TestPathPointerIntegration_IT_13(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	writeFile(t, filepath.Join(repo, "pkg/auth/auth.go"), "package auth")
 	git(t, repo, "add", ".")
@@ -526,7 +542,7 @@ func TestEvidenceIntegration_IT_14(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
 	git(t, repo, "init", "-b", "develop")
-	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
 	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
 	git(t, repo, "add", ".")
 	git(t, repo, "commit", "-m", "initial")
@@ -579,5 +595,77 @@ func TestEvidenceIntegration_IT_14(t *testing.T) {
 	walk(tree.Story)
 	if !found {
 		t.Fatal("tree report missing evidence on the unit test spec")
+	}
+}
+
+// TestWorktreeLifecycleIntegration_IT_17 proves IT-17 (US-17): parallel
+// starts, gates-in-worktree failures, abort cleanup with branch reuse on
+// restart, and the ignore guard, against the engine and a real repo.
+func TestWorktreeLifecycleIntegration_IT_17(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := fullTree(t, e)
+	b := fullTree(t, e)
+	for _, s := range []string{a.story, b.story} {
+		if _, err := e.Transition(s, "refine"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Transition(s, "start"); err != nil {
+			t.Fatalf("parallel start %s: %v", s, err)
+		}
+	}
+
+	// Dirty story worktree blocks finish; dirty main worktree blocks the merge.
+	wtA := wtPath(repo, a.story)
+	writeFile(t, filepath.Join(wtA, "dirty.txt"), "x")
+	_, err := e.Transition(a.story, "finish")
+	wantErr(t, err, "finish blocked", "story worktree not clean")
+	git(t, wtA, "add", ".")
+	git(t, wtA, "commit", "-m", "work")
+	writeFile(t, filepath.Join(repo, "main-dirty.txt"), "x")
+	_, err = e.Transition(a.story, "finish")
+	wantErr(t, err, "main worktree not clean")
+	if err := os.Remove(filepath.Join(repo, "main-dirty.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(a.story, "finish"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	// Abort B keeps nothing; restart reuses no stale state.
+	writeFile(t, filepath.Join(wtPath(repo, b.story), "keep.txt"), "y")
+	git(t, wtPath(repo, b.story), "add", ".")
+	git(t, wtPath(repo, b.story), "commit", "-m", "kept work")
+	if _, err := e.Transition(b.story, "abort"); err != nil {
+		t.Fatal(err)
+	}
+	// B is behind develop now (A merged) — restart creates a fresh branch
+	// from the new base, so finish needs no catch-up.
+	if _, err := e.Transition(b.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(wtPath(repo, b.story), "keep.txt")); err == nil {
+		t.Fatal("aborted work leaked into the fresh worktree")
+	}
+	writeFile(t, filepath.Join(wtPath(repo, b.story), "report-src.xml"), reportXML(b.at, b.it, b.ut))
+	git(t, wtPath(repo, b.story), "add", ".")
+	git(t, wtPath(repo, b.story), "commit", "-m", "b evidence")
+	if _, err := e.Transition(b.story, "finish"); err != nil {
+		t.Fatalf("finish b: %v", err)
 	}
 }

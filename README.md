@@ -41,13 +41,18 @@ todo --refine--> refined --start--> in_progress --finish--> done
 
 - **refine**: tree complete (every AC covered, one arch, ITs, DDs, UTs), every
   node approved and fresh.
-- **start**: creates/checks out `feature/US-n` from the base branch (default
-  `develop`). Clean worktree required.
+- **start**: creates a dedicated git worktree at `.trellis-worktrees/US-n`
+  on branch `feature/US-n` from the base branch (default `develop`). Stories
+  run in parallel by construction; the main worktree stays parked on the
+  base branch, and the scaffolded pre-commit hook rejects direct commits
+  there. `.trellis-worktrees/` must be git-ignored.
 - **finish**: runs the lint command, runs the test command, parses the JUnit
   reports and verifies that every test spec in the tree (AT/IT/UT) is
   referenced by at least one passing, non-skipped test — a test proves spec
   `UT-3` iff its name contains `UT-3` or `UT_3`. Then merges `--no-ff` into
-  the base branch and deletes the feature branch.
+  the base branch via the main worktree and removes worktree and branch.
+  `abort` discards worktree and branch (clean worktree required) and drops
+  the story back to refined.
 
 Statuses can never be set directly; only transitions move them. Done trees
 are the durable context source: traceability from acceptance criteria to

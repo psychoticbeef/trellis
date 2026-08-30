@@ -58,14 +58,15 @@ MCP tools (server "trellis"). It is the single source of truth:
 `, projectID), 0o644)
 
 	if fi, err := os.Stat(filepath.Join(repo, ".git")); err == nil && fi.IsDir() {
-		hook := func(name, gate string) {
-			write(filepath.Join(".git", "hooks", name), fmt.Sprintf(`#!/bin/sh
+		write(filepath.Join(".git", "hooks", "pre-commit"), fmt.Sprintf(`#!/bin/sh
 # installed by trellis init — second defense line; finish stays the authority
-exec trellis gate %s --project %s
-`, gate, projectID), 0o755)
-		}
-		hook("pre-commit", "lint")
-		hook("pre-push", "test")
+trellis gate branch --project %s || exit 1
+exec trellis gate lint --project %s
+`, projectID, projectID), 0o755)
+		write(filepath.Join(".git", "hooks", "pre-push"), fmt.Sprintf(`#!/bin/sh
+# installed by trellis init — second defense line; finish stays the authority
+exec trellis gate test --project %s
+`, projectID), 0o755)
 	} else {
 		msgs = append(msgs, "no .git directory, hooks skipped")
 	}
@@ -101,8 +102,17 @@ func cmdGate(args []string) error {
 		cmd = p.LintCmd
 	case "test":
 		cmd = p.TestCmd
+	case "branch":
+		cur, err := exec.Command("git", "-C", ".", "rev-parse", "--abbrev-ref", "HEAD").Output()
+		if err != nil {
+			return fmt.Errorf("gate branch: %v", err)
+		}
+		if branch := trimNewline(string(cur)); branch == p.BaseBranch {
+			return fmt.Errorf("gate branch failed: direct commits on %q are blocked — work happens in story worktrees, the base branch only receives trellis merges", p.BaseBranch)
+		}
+		return nil
 	default:
-		return fmt.Errorf("unknown gate %q; valid gates: lint, test", which)
+		return fmt.Errorf("unknown gate %q; valid gates: lint, test, branch", which)
 	}
 	if cmd == "" {
 		fmt.Printf("trellis gate %s: not configured for %s, passing\n", which, *project)
@@ -116,4 +126,11 @@ func cmdGate(args []string) error {
 		return fmt.Errorf("gate %s failed (%s): %w", which, cmd, err)
 	}
 	return nil
+}
+
+func trimNewline(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
 }
