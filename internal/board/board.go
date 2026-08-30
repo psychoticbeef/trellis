@@ -79,9 +79,21 @@ type columnView struct {
 	Cards []cardView
 }
 
+type covView struct {
+	TotalPct string
+	Gaps     []covGap
+}
+
+type covGap struct {
+	File string
+	Pct  string
+	Low  bool
+}
+
 type page struct {
 	Project  string
 	Desc     string
+	Coverage *covView
 	Stamp    string
 	Columns  []columnView
 	Stories  []storyView
@@ -168,6 +180,14 @@ func Render(e *core.Engine) (string, error) {
 	}
 	tf := newTermifier(overview.Glossary)
 	p := page{Project: e.Project.ID, Desc: e.Project.Description, Stamp: time.Now().Format("2006-01-02 15:04")}
+	if overview.Coverage != nil {
+		cv := &covView{TotalPct: fmt.Sprintf("%.1f%%", overview.Coverage.TotalPct)}
+		for _, g := range overview.Coverage.Gaps {
+			cv.Gaps = append(cv.Gaps, covGap{File: g.File, Pct: fmt.Sprintf("%.0f%%", g.Pct), Low: g.Pct < 50})
+		}
+		p.Coverage = cv
+	}
+
 	for _, td := range overview.Glossary {
 		p.Glossary = append(p.Glossary, termView{Term: td.Term, Anchor: anchorFor(td.Term), Definition: td.Definition})
 	}
@@ -346,6 +366,12 @@ a.term:hover { color: var(--accent); }
 {{range .Cards}}<a class="scard" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}{{if not .Fresh}} <span class="mark stale">stale</span>{{end}}</a>
 {{end}}</div>{{end}}
 </div>
+
+{{if .Coverage}}<section id="coverage"><h2>Coverage <span class="state">{{.Coverage.TotalPct}}</span></h2>
+{{if .Coverage.Gaps}}<table><thead><tr><th>Largest gaps</th><th></th></tr></thead><tbody>
+{{range .Coverage.Gaps}}<tr><td class="mono">{{.File}}</td><td class="{{if .Low}}stale{{else}}covpct{{end}}">{{.Pct}}</td></tr>
+{{end}}</tbody></table>{{else}}<p class="meta">no gaps — every measured file fully covered</p>{{end}}
+<p class="meta">observability, not a gate: closing a gap stays a judgment call</p></section>{{end}}
 
 {{if .Glossary}}<section id="glossary"><h2>Glossary</h2><table><tbody>
 {{range .Glossary}}<tr id="{{.Anchor}}"><td class="mono">{{.Term}}</td><td>{{.Definition}}</td></tr>

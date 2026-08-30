@@ -9,6 +9,7 @@ import (
 
 	"trellis/internal/gitops"
 	"trellis/internal/model"
+	"trellis/internal/store"
 	"trellis/internal/testreport"
 )
 
@@ -217,6 +218,8 @@ func (e *Engine) finish(story model.Node) (string, error) {
 		return "", fmt.Errorf("finish blocked: test command exited non-zero (%s) although all referenced specs pass — other tests are failing:\n%s", e.Project.TestCmd, tail(testOut, 40))
 	}
 
+	coverageNote := e.recordCoverage(wtPath)
+
 	msg := fmt.Sprintf("Merge %s: %s (trellis finish)", branch, story.Title)
 	if err := g.MergeBranch(branch, e.Project.BaseBranch, msg); err != nil {
 		return "", fmt.Errorf("finish blocked: %w", err)
@@ -231,7 +234,38 @@ func (e *Engine) finish(story model.Node) (string, error) {
 		return "", err
 	}
 	e.st.AppendEvent(e.pid(), "transition", story.ID, "in_progress -> done, merged into "+e.Project.BaseBranch)
-	return fmt.Sprintf("%s is done: %d test specs verified green, %s merged into %s, worktree and branch removed", story.ID, len(specIDs), branch, e.Project.BaseBranch), nil
+	return fmt.Sprintf("%s is done: %d test specs verified green, %s merged into %s, worktree and branch removed%s", story.ID, len(specIDs), branch, e.Project.BaseBranch, coverageNote), nil
+}
+
+// recordCoverage parses and stores the coverage snapshot when configured.
+// Coverage is observability, never a gate: every failure degrades to a note.
+func (e *Engine) recordCoverage(root string) string {
+	if e.Project.CoverageGlob == "" {
+		return ""
+	}
+	files, err := testreport.ParseCoverage(root, e.Project.CoverageGlob)
+	if err != nil {
+		return fmt.Sprintf("; coverage not recorded (%v)", err)
+	}
+	rows := make([]store.CoverageRow, 0, len(files))
+	for _, f := range files {
+		rows = append(rows, store.CoverageRow{File: f.Path, Covered: f.Covered, Total: f.Total})
+	}
+	if err := e.st.SetCoverage(e.pid(), rows); err != nil {
+		return fmt.Sprintf("; coverage not recorded (%v)", err)
+	}
+	total, worst := testreport.Summarize(files, 3)
+	note := fmt.Sprintf("; coverage %.1f%%", total)
+	var gaps []string
+	for _, w := range worst {
+		if w.Pct() < 100 {
+			gaps = append(gaps, fmt.Sprintf("%s %.0f%%", w.Path, w.Pct()))
+		}
+	}
+	if len(gaps) > 0 {
+		note += " (largest gaps: " + strings.Join(gaps, ", ") + ")"
+	}
+	return note
 }
 
 // abort abandons an in_progress story: the feature branch is discarded and

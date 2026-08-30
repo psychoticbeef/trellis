@@ -6,6 +6,7 @@ import (
 
 	"trellis/internal/model"
 	"trellis/internal/store"
+	"trellis/internal/testreport"
 )
 
 // freshness decides whether a node's approval is still valid. A node is fresh
@@ -396,13 +397,25 @@ type CCSummary struct {
 	Accepted bool   `json:"accepted"`
 }
 
+type CoverageSummary struct {
+	TotalPct   float64        `json:"total_pct"`
+	RecordedAt string         `json:"recorded_at"`
+	Gaps       []CoverageFile `json:"gaps"`
+}
+
+type CoverageFile struct {
+	File string  `json:"file"`
+	Pct  float64 `json:"pct"`
+}
+
 type Overview struct {
-	Project      string          `json:"project"`
-	Description  string          `json:"description,omitempty"`
-	Stories      []StorySummary  `json:"stories"`
-	CrossCutting []CCSummary     `json:"cross_cutting"`
-	Glossary     []store.TermDef `json:"glossary"`
-	StaleNodes   []string        `json:"stale_nodes"`
+	Project      string           `json:"project"`
+	Description  string           `json:"description,omitempty"`
+	Coverage     *CoverageSummary `json:"coverage,omitempty"`
+	Stories      []StorySummary   `json:"stories"`
+	CrossCutting []CCSummary      `json:"cross_cutting"`
+	Glossary     []store.TermDef  `json:"glossary"`
+	StaleNodes   []string         `json:"stale_nodes"`
 }
 
 func (e *Engine) Overview() (Overview, error) {
@@ -411,6 +424,22 @@ func (e *Engine) Overview() (Overview, error) {
 		return o, err
 	} else if terms != nil {
 		o.Glossary = terms
+	}
+	if rows, err := e.st.ListCoverage(e.pid()); err != nil {
+		return o, err
+	} else if len(rows) > 0 {
+		files := make([]testreport.FileCov, 0, len(rows))
+		for _, r := range rows {
+			files = append(files, testreport.FileCov{Path: r.File, Covered: r.Covered, Total: r.Total})
+		}
+		total, worst := testreport.Summarize(files, 10)
+		cs := &CoverageSummary{TotalPct: total, RecordedAt: rows[0].RecordedAt, Gaps: []CoverageFile{}}
+		for _, w := range worst {
+			if w.Pct() < 100 {
+				cs.Gaps = append(cs.Gaps, CoverageFile{File: w.Path, Pct: w.Pct()})
+			}
+		}
+		o.Coverage = cs
 	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {

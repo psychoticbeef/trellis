@@ -507,3 +507,46 @@ func TestWorktreeAcceptance_AT_20(t *testing.T) {
 	callErr(t, cs2, "transition", map[string]any{"story_id": s2, "action": "start"},
 		"start blocked", "not git-ignored", ".gitignore")
 }
+
+// TestCoverageAcceptance_AT_36 proves AT-36 (US-32 "Coverage visibility")
+// through MCP plus the board: snapshot after finish, summary in the message,
+// notice on broken input, flagged gaps on the board.
+func TestCoverageAcceptance_AT_36(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "cov-src.txt"),
+		[]byte("TN:\nSF:src/low.ts\nDA:1,0\nDA:2,0\nDA:3,1\nend_of_record\nSF:src/high.ts\nDA:1,1\nend_of_record\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:      "true",
+		TestCmd:      "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null; cp cov-src.txt reports/cov.data",
+		JUnitGlob:    "reports/*.xml",
+		CoverageGlob: "reports/cov.data"})
+	story, at, _, it, _, ut := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	setReport(t, wtOf(repo, story), map[string]string{at: "", it: "", ut: ""})
+	msg := call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})["message"].(string)
+	if !strings.Contains(msg, "coverage 50.0%") || !strings.Contains(msg, "src/low.ts") {
+		t.Fatalf("finish message: %s", msg)
+	}
+
+	o := call(t, cs, "get_overview", map[string]any{})
+	blob, _ := json.Marshal(o["coverage"])
+	if !strings.Contains(string(blob), `"total_pct":50`) || !strings.Contains(string(blob), "src/low.ts") ||
+		strings.Contains(string(blob), "src/high.ts") {
+		t.Fatalf("overview coverage: %s", blob)
+	}
+
+	html := renderBoard(t, cs)
+	if !strings.Contains(html, `id="coverage"`) || !strings.Contains(html, "src/low.ts") ||
+		!strings.Contains(html, `class="stale">33%`) {
+		t.Fatal("board coverage section missing or gap not flagged")
+	}
+}
