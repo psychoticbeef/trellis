@@ -1051,3 +1051,143 @@ func TestConcurrencyIntegration_IT_27(t *testing.T) {
 	}
 	unlock()
 }
+
+// TestReleaseAuthority_IT_31 proves IT-31 (US-31): release succeeds although
+// the installed pre-commit hook would fail, and a post-merge failure unwinds
+// without leaking manifest files onto the base branch.
+func TestReleaseAuthority_IT_31(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	// A hook that always fails: release must not care.
+	writeFile(t, filepath.Join(repo, ".git/hooks/pre-commit"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(repo, ".git/hooks/pre-commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	p.ReleaseBranch = "main"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+	wt := wtPath(repo, tr.story)
+	writeFile(t, filepath.Join(wt, "impl.txt"), "x")
+	git(t, wt, "add", ".")
+	// The feature commit is agent work and must OBEY hooks — commit with
+	// no-verify here only because this test's hook always fails.
+	git(t, wt, "commit", "--no-verify", "-m", "impl")
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	// Release passes although the pre-commit hook would reject any commit.
+	if _, err := e.Release(); err != nil {
+		t.Fatalf("release with hostile hook: %v", err)
+	}
+	if out := git(t, repo, "show", "main:FEATURES.md"); !strings.Contains(out, "# test") {
+		t.Fatalf("manifest missing:\n%.120s", out)
+	}
+	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("on %s, want develop", got)
+	}
+	if dirt := git(t, repo, "status", "--porcelain"); dirt != "" {
+		t.Fatalf("base branch dirty after release:\n%s", dirt)
+	}
+}
+
+// TestReleaseUnwind_UT_32 and TestReleaseAuthorityAcceptance_AT_35: the
+// unwind path leaves the base branch clean when the manifest commit fails.
+func TestReleaseUnwind_UT_32(t *testing.T) { releaseUnwindScenario(t) }
+
+// TestReleaseAuthorityAcceptance_AT_35 proves AT-35 (US-31 "Release commits
+// carry trellis authority") — same scenario driven end to end: hostile hook
+// ignored on success (see IT-31) and clean unwind on failure.
+func TestReleaseAuthorityAcceptance_AT_35(t *testing.T) { releaseUnwindScenario(t) }
+
+func gitOut(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func releaseUnwindScenario(t *testing.T) {
+	t.Helper()
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	p.ReleaseBranch = "main"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	for _, verb := range []string{"refine", "start"} {
+		if _, err := e.Transition(tr.story, verb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt := wtPath(repo, tr.story)
+	writeFile(t, filepath.Join(wt, "impl.txt"), "x")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "impl")
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	// Post-merge failure injection: an ignored FEATURES.md makes the staging
+	// of the manifest fail after the merge succeeded.
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\nFEATURES.md\n")
+	git(t, repo, "add", ".gitignore")
+	git(t, repo, "commit", "-m", "block manifest")
+	if _, err := e.Release(); err == nil {
+		t.Fatal("release must fail while the manifest is ignored")
+	}
+	// The rollback is total: a failed first release leaves no release branch.
+	if _, err := gitOut(repo, "rev-parse", "--verify", "refs/heads/main"); err == nil {
+		t.Fatal("failed first release left the release branch behind")
+	}
+	// Undo the obstacle; the retry re-merges the same delta.
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	git(t, repo, "add", ".gitignore")
+	git(t, repo, "commit", "-m", "unblock manifest")
+	// Unwind left the base branch clean: no staged or stray manifest files.
+	if got := git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("on %s, want develop after failed release", got)
+	}
+	if dirt := git(t, repo, "status", "--porcelain"); dirt != "" {
+		t.Fatalf("base branch dirty after failed release:\n%s", dirt)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "FEATURES.md")); err == nil {
+		t.Fatal("manifest leaked onto the base branch")
+	}
+
+	// And the same release succeeds once the obstacle is gone.
+	if _, err := e.Release(); err != nil {
+		t.Fatalf("release after unwind: %v", err)
+	}
+}
