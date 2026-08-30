@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // scaffold wires a repo to a trellis project: MCP registration, agent
 // instructions and git hooks. Create-if-absent, never overwrite — existing
-// files are reported and preserved.
-func scaffold(repo, projectID string) []string {
+// files are reported and preserved. It returns the messages plus the list of
+// created repo files (hooks excluded), so init can commit exactly those.
+func scaffold(repo, projectID string) ([]string, []string) {
 	var msgs []string
+	var created []string
 	write := func(rel, content string, mode os.FileMode) {
 		path := filepath.Join(repo, rel)
 		if _, err := os.Stat(path); err == nil {
@@ -28,6 +31,17 @@ func scaffold(repo, projectID string) []string {
 			return
 		}
 		msgs = append(msgs, rel+" created")
+		if !strings.HasPrefix(rel, ".git"+string(os.PathSeparator)) {
+			created = append(created, rel)
+		}
+	}
+	// The worktree ignore line is the one sanctioned amendment to an existing
+	// file: start depends on it (US-29).
+	if changed, msg := ensureIgnoreLine(repo); msg != "" {
+		msgs = append(msgs, msg)
+		if changed {
+			created = append(created, ".gitignore")
+		}
 	}
 
 	write(".mcp.json", fmt.Sprintf(`{
@@ -72,7 +86,57 @@ exec trellis gate test --project %s
 	} else {
 		msgs = append(msgs, "no .git directory, hooks skipped")
 	}
-	return msgs
+	if _, err := exec.LookPath("trellis"); err != nil {
+		msgs = append(msgs, "warning: trellis is not on PATH — the installed hooks and .mcp.json invoke `trellis`; install the binary into your PATH (e.g. cp trellis /usr/local/bin/)")
+	}
+	return msgs, created
+}
+
+// ensureIgnoreLine makes sure .trellis-worktrees/ is git-ignored: creates
+// .gitignore or appends the line, preserving existing content.
+func ensureIgnoreLine(repo string) (changed bool, msg string) {
+	const line = ".trellis-worktrees/"
+	path := filepath.Join(repo, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		for _, l := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(l) == line {
+				return false, ".gitignore already ignores " + line
+			}
+		}
+		content := string(data)
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		if err := os.WriteFile(path, []byte(content+line+"\n"), 0o644); err != nil {
+			return false, ".gitignore: " + err.Error()
+		}
+		return true, ".gitignore amended with " + line
+	}
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		return false, ".gitignore: " + err.Error()
+	}
+	return true, ".gitignore created with " + line
+}
+
+// commitScaffold commits the wiring files init just created. Init bypasses
+// the hooks it installed — trellis is the authority those hooks defend.
+func commitScaffold(repo string, files []string) string {
+	if len(files) == 0 {
+		return "nothing new to commit"
+	}
+	if fi, err := os.Stat(filepath.Join(repo, ".git")); err != nil || !fi.IsDir() {
+		return "no .git directory, nothing committed"
+	}
+	args := append([]string{"-C", repo, "add", "--"}, files...)
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		return "staging wiring files failed: " + strings.TrimSpace(string(out))
+	}
+	out, err := exec.Command("git", "-C", repo, "commit", "--no-verify", "-m", "trellis init: repo wiring").CombinedOutput()
+	if err != nil {
+		return "wiring commit failed: " + strings.TrimSpace(string(out))
+	}
+	return "wiring committed (" + strings.Join(files, ", ") + ")"
 }
 
 // cmdGate runs a configured gate command (lint or test) in the project repo.
