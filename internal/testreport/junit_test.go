@@ -30,7 +30,7 @@ func writeReport(t *testing.T) string {
 	return dir
 }
 
-func TestParseAndMatch(t *testing.T) {
+func TestParseAndMatch_UT_6(t *testing.T) {
 	dir := writeReport(t)
 	cases, err := ParseGlob(dir, "*.xml")
 	if err != nil {
@@ -47,7 +47,7 @@ func TestParseAndMatch(t *testing.T) {
 	}
 }
 
-func TestVerify(t *testing.T) {
+func TestVerify_UT_6(t *testing.T) {
 	dir := writeReport(t)
 	cases, err := ParseGlob(dir, "*.xml")
 	if err != nil {
@@ -65,7 +65,7 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-func TestEmptyGlobIsError(t *testing.T) {
+func TestEmptyGlobIsError_UT_6(t *testing.T) {
 	if _, err := ParseGlob(t.TempDir(), "*.xml"); err == nil {
 		t.Fatal("zero matching reports must be an error, not an empty pass")
 	}
