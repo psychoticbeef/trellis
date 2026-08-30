@@ -92,6 +92,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// Additive migration for stores created before the paths column existed.
+	if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN paths TEXT NOT NULL DEFAULT '[]'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate paths: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -179,18 +185,21 @@ func (s *Store) NextID(projectID, scope string) (int, error) {
 
 // ---- nodes ----
 
-const nodeCols = `id, project_id, kind, parent_id, title, body, covers, status, approved_content_hash, approved_parent_hash, created_at, updated_at`
+const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, approved_content_hash, approved_parent_hash, created_at, updated_at`
 
 func scanNode(row interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
-	var covers, created, updated string
-	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &n.Status,
+	var covers, paths, created, updated string
+	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &paths, &n.Status,
 		&n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
 	if err != nil {
 		return n, err
 	}
 	if err := json.Unmarshal([]byte(covers), &n.Covers); err != nil {
 		return n, fmt.Errorf("node %s: bad covers: %w", n.ID, err)
+	}
+	if err := json.Unmarshal([]byte(paths), &n.Paths); err != nil {
+		return n, fmt.Errorf("node %s: bad paths: %w", n.ID, err)
 	}
 	n.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	n.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
@@ -206,9 +215,23 @@ func coversJSON(covers []string) string {
 }
 
 func (s *Store) InsertNode(n model.Node) error {
-	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), n.Status,
+	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), stringsJSON(n.Paths), n.Status,
 		n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
+	return err
+}
+
+func stringsJSON(v []string) string {
+	if v == nil {
+		v = []string{}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func (s *Store) SetNodePaths(projectID, id string, paths []string) error {
+	_, err := s.db.Exec(`UPDATE nodes SET paths=?, updated_at=? WHERE project_id=? AND id=?`,
+		stringsJSON(paths), now(), projectID, id)
 	return err
 }
 

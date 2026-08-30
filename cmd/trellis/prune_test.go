@@ -127,3 +127,38 @@ func TestPruneCLIAcceptance_AT_7(t *testing.T) {
 		t.Errorf("cross-cutting %s must survive prune: %v", cc.ID, err)
 	}
 }
+
+// TestAffectedCLIAcceptance_AT_16 proves AT-16 (US-13 "Spec-to-code paths"):
+// trellis affected prints the stories declaring a file or parent folder and
+// nothing for undeclared paths.
+func TestAffectedCLIAcceptance_AT_16(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, _ := e.CreateNode(model.KindStory, "", "auth story", "", nil)
+	if _, err := e.SetPaths(story.ID, []string{"pkg/auth"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"affected", "p1", "pkg/auth/token.go"}); err != nil {
+		t.Fatalf("affected: %v", err)
+	}
+	if err := run([]string{"affected", "p1", "pkg/other/file.go"}); err != nil {
+		t.Fatalf("affected (no match): %v", err)
+	}
+	// The CLI shares the engine's matching; assert it directly for the output path.
+	hits, err := e.StoriesForPath("pkg/auth/token.go")
+	if err != nil || len(hits) != 1 || hits[0].ID != story.ID {
+		t.Fatalf("engine lookup backing the CLI: %v %v", hits, err)
+	}
+}

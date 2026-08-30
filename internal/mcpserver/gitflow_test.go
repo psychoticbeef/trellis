@@ -1,12 +1,16 @@
 package mcpserver_test
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"trellis/internal/store"
 )
@@ -342,5 +346,54 @@ func TestSequencingAcceptance_AT_13(t *testing.T) {
 	call(t, cs, "transition", map[string]any{"story_id": b, "action": "start"})
 	if st, _ := nodeStatus(t, cs, b); st != "in_progress" {
 		t.Fatalf("status = %s, want in_progress", st)
+	}
+}
+
+// TestPathPointerAcceptance_AT_15 proves AT-15 (US-13 "Spec-to-code paths")
+// through MCP: declare paths, read them back, finish blocked on a missing
+// path, green after fixing, reverse lookup for a nested file.
+func TestPathPointerAcceptance_AT_15(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "pkg/auth"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg/auth/auth.go"), []byte("package auth"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+	story, at, _, it, _, ut := fullTreeMCP(t, cs)
+
+	call(t, cs, "set_paths", map[string]any{"story_id": story, "paths": []string{"pkg/auth", "missing/file.go"}})
+	n := call(t, cs, "get_node", map[string]any{"id": story})
+	blob, _ := json.Marshal(n["paths"])
+	if !strings.Contains(string(blob), "pkg/auth") {
+		t.Fatalf("paths not visible in node report: %s", blob)
+	}
+
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
+		"declared paths missing in repo", "missing/file.go")
+
+	call(t, cs, "set_paths", map[string]any{"story_id": story, "paths": []string{"pkg/auth"}})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "specs_for_path",
+		Arguments: map[string]any{"path": "pkg/auth/auth.go"}})
+	if err != nil || res.IsError {
+		t.Fatalf("specs_for_path: %v %s", err, text(res))
+	}
+	if !strings.Contains(text(res), story) {
+		t.Fatalf("reverse lookup missing %s: %s", story, text(res))
 	}
 }

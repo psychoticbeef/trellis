@@ -464,3 +464,56 @@ func TestSequencingIntegration_IT_11(t *testing.T) {
 		t.Fatalf("start after dependency done: %v", err)
 	}
 }
+
+// TestPathPointerIntegration_IT_13 proves IT-13 (US-13): set/replace/clear
+// without touching approvals, finish blocked per missing path, reverse lookup.
+func TestPathPointerIntegration_IT_13(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	writeFile(t, filepath.Join(repo, "pkg/auth/auth.go"), "package auth")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if _, err := e.SetPaths(tr.story, []string{"pkg/auth", "cmd/tool/main.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.Node(tr.story); !n.Fresh {
+		t.Fatal("SetPaths must not invalidate the story approval")
+	}
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "start"); err != nil {
+		t.Fatal(err)
+	}
+
+	// finish blocked: one declared path missing.
+	_, err := e.Transition(tr.story, "finish")
+	wantErr(t, err, "declared paths missing in repo", "cmd/tool/main.go")
+
+	// Fix by narrowing the declaration; finish passes.
+	if _, err := e.SetPaths(tr.story, []string{"pkg/auth"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	// Reverse lookup after done.
+	hits, err := e.StoriesForPath("pkg/auth/auth.go")
+	if err != nil || len(hits) != 1 || hits[0].ID != tr.story || hits[0].Status != "done" {
+		t.Fatalf("reverse lookup: %v %v", hits, err)
+	}
+}

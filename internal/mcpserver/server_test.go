@@ -361,7 +361,7 @@ func TestGateAcceptance_AT_5(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tool := range tools.Tools {
 		seen[tool.Name] = true
-		if strings.Contains(tool.Name, "status") || strings.HasPrefix(tool.Name, "set_") {
+		if strings.Contains(tool.Name, "status") || strings.Contains(tool.Name, "state") {
 			t.Errorf("tool surface must not offer status setting, found %q", tool.Name)
 		}
 	}

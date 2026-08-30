@@ -828,3 +828,55 @@ func TestSearchIntegration_IT_12(t *testing.T) {
 		t.Fatalf("cc search: %+v", hits)
 	}
 }
+
+// TestPathMatching_UT_14 proves UT-14 (DD-14 "Path storage and matching"):
+// path cleaning, exact and folder-prefix matching incl. the foo vs foobar
+// boundary, and hash stability of SetPaths.
+func TestPathMatching_UT_14(t *testing.T) {
+	e := newMemEngine(t)
+	s := mustCreate(t, e, model.KindStory, "", "s", nil)
+	approve(t, e, s.ID)
+	before, _ := e.Node(s.ID)
+
+	// Cleaning: dedup, normalization, rejection of absolute and escaping paths.
+	cleaned, err := e.SetPaths(s.ID, []string{"api/./auth.go", "api/auth.go", "docs/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleaned) != 2 || cleaned[0] != "api/auth.go" || cleaned[1] != "docs" {
+		t.Fatalf("cleaned = %v", cleaned)
+	}
+	if _, err := e.SetPaths(s.ID, []string{"/abs/path"}); err == nil {
+		t.Fatal("absolute path must be rejected")
+	}
+	if _, err := e.SetPaths(s.ID, []string{"../escape"}); err == nil {
+		t.Fatal("escaping path must be rejected")
+	}
+	if _, err := e.SetPaths("nope", []string{"x"}); err == nil {
+		t.Fatal("unknown story must be rejected")
+	}
+
+	// Hash stability: paths are metadata, approval survives.
+	after, _ := e.Node(s.ID)
+	if after.Hash != before.Hash || !after.Fresh {
+		t.Fatalf("SetPaths must not touch the content hash (before %s, after %s, fresh %v)", before.Hash, after.Hash, after.Fresh)
+	}
+
+	// Matching: exact, folder prefix, foo vs foobar boundary.
+	if !core.PathCovers("api/auth.go", "api/auth.go") {
+		t.Fatal("exact match")
+	}
+	if !core.PathCovers("docs", "docs/adr/001.md") {
+		t.Fatal("folder prefix match")
+	}
+	if core.PathCovers("docs", "docsx/file.md") {
+		t.Fatal("foobar boundary must not match")
+	}
+	hits, err := e.StoriesForPath("api/auth.go")
+	if err != nil || len(hits) != 1 || hits[0].ID != s.ID {
+		t.Fatalf("StoriesForPath: %v %v", hits, err)
+	}
+	if hits, _ := e.StoriesForPath("api/other.go"); len(hits) != 0 {
+		t.Fatalf("non-declared file matched: %v", hits)
+	}
+}
