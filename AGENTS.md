@@ -14,6 +14,9 @@ MCP tools (server `trellis`). It is the single source of truth:
   re-approve it; stale markers show what still needs review.
 - A story may only be implemented via `transition(story, "start")` and
   completed via `transition(story, "finish")`. Never merge to develop yourself.
+- `start` creates a dedicated worktree under `.trellis-worktrees/<story>` —
+  do all implementation work inside that directory; the main worktree stays
+  parked on develop and rejects direct commits.
 - Test names must reference the spec ids they prove (e.g. `TestFoo_UT_3`
   proves UT-3).
 - Build the binary with `go build -o bin/trellis ./cmd/trellis` if

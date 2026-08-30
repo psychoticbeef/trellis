@@ -86,52 +86,56 @@ func (g Git) IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", ancestor, descendant, err)
 }
 
-// MergeToBase merges the feature branch into base with --no-ff and deletes the
-// feature branch. On merge failure it aborts and returns to the feature branch.
-func (g Git) MergeToBase(branch, base, message string) error {
+// MergeBranch merges a feature branch into base with --no-ff via the main
+// worktree, which must be clean; it is checked out on base first. On merge
+// failure the merge is aborted and the main worktree stays on base.
+func (g Git) MergeBranch(branch, base, message string) error {
 	clean, err := g.IsClean()
 	if err != nil {
 		return err
 	}
 	if !clean {
-		return fmt.Errorf("worktree not clean: commit all changes before finishing")
-	}
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	if cur != branch {
-		return fmt.Errorf("on branch %q, expected feature branch %q", cur, branch)
+		return fmt.Errorf("main worktree not clean: commit or stash its changes before finishing")
 	}
 	if _, err := g.run("checkout", base); err != nil {
 		return err
 	}
 	if _, err := g.run("merge", "--no-ff", "-m", message, branch); err != nil {
 		_, _ = g.run("merge", "--abort")
-		_, _ = g.run("checkout", branch)
-		return fmt.Errorf("merge into %s failed, aborted and returned to %s: %w", base, branch, err)
-	}
-	if _, err := g.run("branch", "-d", branch); err != nil {
-		return fmt.Errorf("merged, but deleting branch failed: %w", err)
+		return fmt.Errorf("merge into %s failed and was aborted: %w", base, err)
 	}
 	return nil
 }
 
-// DiscardBranch abandons a feature branch: checks out base and force-deletes
-// the branch. Requires a clean worktree so work is never silently destroyed.
-func (g Git) DiscardBranch(branch, base string) error {
-	clean, err := g.IsClean()
-	if err != nil {
+// WorktreeAdd creates a worktree at path, reusing an existing branch or
+// creating it fresh from base.
+func (g Git) WorktreeAdd(path, branch, base string) error {
+	if g.BranchExists(branch) {
+		_, err := g.run("worktree", "add", path, branch)
 		return err
 	}
-	if !clean {
-		return fmt.Errorf("worktree not clean: commit or stash changes before aborting — work is never silently destroyed")
+	if !g.BranchExists(base) {
+		return fmt.Errorf("base branch %q does not exist: create it first (git branch %s)", base, base)
 	}
-	if _, err := g.run("checkout", base); err != nil {
-		return err
-	}
-	if _, err := g.run("branch", "-D", branch); err != nil {
-		return fmt.Errorf("checked out %s, but deleting %s failed: %w", base, branch, err)
-	}
-	return nil
+	_, err := g.run("worktree", "add", "-b", branch, path, base)
+	return err
+}
+
+// WorktreeRemove removes a worktree registration and its directory.
+func (g Git) WorktreeRemove(path string) error {
+	_, err := g.run("worktree", "remove", "--force", path)
+	return err
+}
+
+// DeleteBranch force-deletes a branch (used after its worktree is gone).
+func (g Git) DeleteBranch(branch string) error {
+	_, err := g.run("branch", "-D", branch)
+	return err
+}
+
+// IsIgnored reports whether a repo-relative path is covered by .gitignore.
+func (g Git) IsIgnored(rel string) bool {
+	cmd := exec.Command("git", "check-ignore", "-q", rel)
+	cmd.Dir = g.Dir
+	return cmd.Run() == nil
 }

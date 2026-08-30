@@ -38,7 +38,7 @@ func TestPruneCLIAcceptance_AT_7(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
@@ -174,7 +174,7 @@ func TestBoardCLIAcceptance_AT_18(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "add", ".")
