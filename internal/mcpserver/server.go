@@ -205,6 +205,16 @@ type okOut struct {
 	Message string `json:"message"`
 }
 
+// Envelope objects: strict MCP clients require object-typed output schemas,
+// so list results never travel as bare arrays (US-30).
+type searchOut struct {
+	Hits []core.SearchHit `json:"hits"`
+}
+
+type storiesOut struct {
+	Stories []core.StorySummary `json:"stories"`
+}
+
 // ---- handlers ----
 
 func (s *Server) getOverview(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, core.Overview, error) {
@@ -309,9 +319,12 @@ func (s *Server) unlinkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) 
 	return nil, okOut{Message: fmt.Sprintf("dependency %s -> %s removed", in.NodeID, in.TargetID)}, nil
 }
 
-func (s *Server) searchSpecs(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, []core.SearchHit, error) {
+func (s *Server) searchSpecs(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
 	hits, err := s.engine.Search(in.Query)
-	return nil, hits, err
+	if hits == nil {
+		hits = []core.SearchHit{}
+	}
+	return nil, searchOut{Hits: hits}, err
 }
 
 func (s *Server) setPaths(_ context.Context, _ *mcp.CallToolRequest, in setPathsIn) (*mcp.CallToolResult, okOut, error) {
@@ -322,9 +335,12 @@ func (s *Server) setPaths(_ context.Context, _ *mcp.CallToolRequest, in setPaths
 	return nil, okOut{Message: fmt.Sprintf("%s now declares %d path(s): %v", in.StoryID, len(cleaned), cleaned)}, nil
 }
 
-func (s *Server) specsForPath(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, []core.StorySummary, error) {
+func (s *Server) specsForPath(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, storiesOut, error) {
 	stories, err := s.engine.StoriesForPath(in.Path)
-	return nil, stories, err
+	if stories == nil {
+		stories = []core.StorySummary{}
+	}
+	return nil, storiesOut{Stories: stories}, err
 }
 
 func (s *Server) setDescription(_ context.Context, _ *mcp.CallToolRequest, in descIn) (*mcp.CallToolResult, okOut, error) {
