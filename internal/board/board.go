@@ -67,10 +67,23 @@ type termView struct {
 	Definition string
 }
 
+type cardView struct {
+	ID    string
+	Title string
+	Fresh bool
+}
+
+type columnView struct {
+	Label string
+	Cl    string
+	Cards []cardView
+}
+
 type page struct {
 	Project  string
 	Desc     string
 	Stamp    string
+	Columns  []columnView
 	Stories  []storyView
 	CCs      []ccView
 	Glossary []termView
@@ -192,6 +205,19 @@ func Render(e *core.Engine) (string, error) {
 		}
 		p.Stories = append(p.Stories, sv)
 	}
+	// Kanban columns in lifecycle order; every story lands in its column.
+	order := []string{"todo", "refined", "in_progress", "done"}
+	byStatus := map[string]*columnView{}
+	p.Columns = make([]columnView, 0, len(order)) // fixed capacity: the pointers below must survive
+	for _, st := range order {
+		p.Columns = append(p.Columns, columnView{Label: strings.ReplaceAll(st, "_", " "), Cl: strings.ReplaceAll(st, "_", ""), Cards: []cardView{}})
+		byStatus[st] = &p.Columns[len(p.Columns)-1]
+	}
+	for _, sv := range p.Stories {
+		if col, ok := byStatus[sv.Status]; ok {
+			col.Cards = append(col.Cards, cardView{ID: sv.ID, Title: sv.Title, Fresh: sv.Fresh})
+		}
+	}
 	var b strings.Builder
 	if err := tmpl.Execute(&b, p); err != nil {
 		return "", err
@@ -297,15 +323,29 @@ tr:last-child td { border-bottom: none; }
 .gates { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
 a { color: var(--accent); }
 a.term { color: inherit; text-decoration: underline dotted var(--accent); text-underline-offset: 2px; }
+.kanban { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 28px; }
+@media (max-width: 720px) { .kanban { grid-template-columns: repeat(2, 1fr); } }
+.col { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
+.colh { margin: 0 0 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; display: flex; justify-content: space-between; }
+.count { color: var(--muted); font-weight: 400; }
+.scard { display: block; background: var(--ground); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 0 0 8px; color: var(--ink); text-decoration: none; font-size: 0.88rem; line-height: 1.35; }
+.scard:hover { border-color: var(--accent); }
+.scard .mono { color: var(--accent); display: block; margin-bottom: 2px; }
+details.story { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px 24px; margin: 0 0 14px; }
+details.story > summary { cursor: pointer; list-style: none; font-family: Bitter, Georgia, serif; font-size: 1.15rem; font-weight: 600; }
+details.story > summary::-webkit-details-marker { display: none; }
+details.story[open] > summary { margin-bottom: 12px; }
 a.term:hover { color: var(--accent); }
 </style></head><body>
 <div class="wrap">
 <h1><span>trellis</span> board</h1>
 {{if .Desc}}<p class="desc">{{.Desc}}</p>{{end}}
 <p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
-<nav class="chips">
-{{range .Stories}}<a class="chip" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span></a>
-{{end}}</nav>
+<div class="kanban">
+{{range .Columns}}<div class="col"><h3 class="colh st-{{.Cl}}">{{.Label}}<span class="count">{{len .Cards}}</span></h3>
+{{range .Cards}}<a class="scard" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}{{if not .Fresh}} <span class="mark stale">stale</span>{{end}}</a>
+{{end}}</div>{{end}}
+</div>
 
 {{if .Glossary}}<section id="glossary"><h2>Glossary</h2><table><tbody>
 {{range .Glossary}}<tr id="{{.Anchor}}"><td class="mono">{{.Term}}</td><td>{{.Definition}}</td></tr>
@@ -316,8 +356,8 @@ a.term:hover { color: var(--accent); }
 {{end}}</section>
 
 {{range .Stories}}
-<section id="{{.ID}}">
-<h2><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}</h2>
+<details class="story" id="{{.ID}}">
+<summary><span class="mono nid">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}</summary>
 <p class="storybody">{{.BodyHTML}}</p>
 {{if .Paths}}<p class="meta">code: <span class="mono">{{join .Paths}}</span></p>{{end}}
 {{if .ACs}}<table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
@@ -325,9 +365,22 @@ a.term:hover { color: var(--accent); }
 {{end}}</tbody></table>{{end}}
 {{range .Children}}{{template "node" .}}{{end}}
 {{if .Blocked}}<p class="gates stale">blocked</p>{{range .Blocked}}<div class="problem">{{.}}</div>{{end}}{{else}}<p class="gates ok">gates open</p>{{end}}
-</section>
+</details>
 {{end}}
-</div></body></html>
+</div>
+<script>
+function openTarget() {
+	var id = location.hash && location.hash.slice(1);
+	if (!id) return;
+	var el = document.getElementById(id);
+	var walk = el;
+	while (walk) { if (walk.tagName === 'DETAILS') walk.open = true; walk = walk.parentElement; }
+	if (el) el.scrollIntoView();
+}
+window.addEventListener('hashchange', openTarget);
+openTarget();
+</script>
+</body></html>
 
 {{define "node"}}<details class="node {{depthClass .Depth}}" id="{{.ID}}"{{if lt .Depth 2}} open{{end}}>
 <summary><span class="mono nid">{{.ID}}</span><span class="kind">{{.KindName}}</span> {{.Title}}
