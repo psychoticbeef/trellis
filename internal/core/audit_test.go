@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// TestAuditUnit_UT_35 proves UT-35 (DD-35 "Audit mechanics"): spec-id
+// TestAuditUnit_UT_34 proves UT-34 (DD-35 "Audit mechanics"): spec-id
 // extraction boundaries, meta-file exclusion, envelope serialization.
-func TestAuditUnit_UT_35(t *testing.T) {
+func TestAuditUnit_UT_34(t *testing.T) {
 	extract := func(name string) []string {
 		var out []string
 		for _, m := range testSpecIDRe.FindAllStringSubmatch(name, -1) {
