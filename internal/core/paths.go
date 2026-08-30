@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"trellis/internal/store"
 
 	"trellis/internal/model"
 )
@@ -95,4 +96,43 @@ func (e *Engine) StoriesForPath(file string) ([]StorySummary, error) {
 		}
 	}
 	return out, nil
+}
+
+// Glossary limits: entries stay ultra short by construction.
+const (
+	maxTermLen = 64
+	maxDefLen  = 240
+)
+
+// DefineTerm creates or updates a glossary entry within the length limits.
+func (e *Engine) DefineTerm(term, definition string) error {
+	term = strings.TrimSpace(term)
+	definition = strings.TrimSpace(definition)
+	if term == "" || definition == "" {
+		return fmt.Errorf("term and definition must be non-empty")
+	}
+	if len(term) > maxTermLen {
+		return fmt.Errorf("term %q exceeds %d characters — glossary terms stay short", term, maxTermLen)
+	}
+	if len(definition) > maxDefLen {
+		return fmt.Errorf("definition for %q exceeds %d characters (%d) — glossary entries stay ultra short: cut it down", term, maxDefLen, len(definition))
+	}
+	if err := e.st.DefineTerm(e.pid(), term, definition); err != nil {
+		return err
+	}
+	e.st.AppendEvent(e.pid(), "glossary", "", "define "+term)
+	return nil
+}
+
+func (e *Engine) DeleteTerm(term string) error {
+	if err := e.st.DeleteTerm(e.pid(), strings.TrimSpace(term)); err != nil {
+		return err
+	}
+	e.st.AppendEvent(e.pid(), "glossary", "", "delete "+term)
+	return nil
+}
+
+// Terms returns the full glossary.
+func (e *Engine) Terms() ([]store.TermDef, error) {
+	return e.st.ListTerms(e.pid())
 }

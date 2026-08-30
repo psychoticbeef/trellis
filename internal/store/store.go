@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS evidence (
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (project_id, node_id)
 );
+CREATE TABLE IF NOT EXISTS glossary (
+	project_id TEXT NOT NULL,
+	term       TEXT NOT NULL,
+	definition TEXT NOT NULL,
+	PRIMARY KEY (project_id, term)
+);
 CREATE TABLE IF NOT EXISTS events (
 	seq        INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_id TEXT NOT NULL,
@@ -490,6 +496,49 @@ func (s *Store) GetEvidence(projectID, nodeID string) (Evidence, bool, error) {
 func (s *Store) DeleteEvidence(projectID, nodeID string) error {
 	_, err := s.db.Exec(`DELETE FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID)
 	return err
+}
+
+// ---- glossary ----
+
+type TermDef struct {
+	Term       string `json:"term"`
+	Definition string `json:"definition"`
+}
+
+// DefineTerm creates or updates a glossary entry.
+func (s *Store) DefineTerm(projectID, term, definition string) error {
+	_, err := s.db.Exec(`INSERT INTO glossary (project_id, term, definition) VALUES (?,?,?)
+		ON CONFLICT(project_id, term) DO UPDATE SET definition=excluded.definition`,
+		projectID, term, definition)
+	return err
+}
+
+func (s *Store) DeleteTerm(projectID, term string) error {
+	res, err := s.db.Exec(`DELETE FROM glossary WHERE project_id=? AND term=?`, projectID, term)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("glossary term %q: %w", term, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *Store) ListTerms(projectID string) ([]TermDef, error) {
+	rows, err := s.db.Query(`SELECT term, definition FROM glossary WHERE project_id=? ORDER BY term COLLATE NOCASE`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TermDef
+	for rows.Next() {
+		var td TermDef
+		if err := rows.Scan(&td.Term, &td.Definition); err != nil {
+			return nil, err
+		}
+		out = append(out, td)
+	}
+	return out, rows.Err()
 }
 
 // ---- events ----

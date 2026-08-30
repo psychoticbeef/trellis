@@ -27,6 +27,8 @@ Workflow per story:
    -> implement -> "finish" (lint, tests, verifies every test spec has a
    passing test referencing its id, merges into the base branch).
 
+Check the glossary in get_overview and reuse its exact wording in every spec
+you write; define new project terms with define_term (ultra short).
 Test naming: a test proves spec UT-3 iff its name contains "UT-3" or "UT_3".
 Editing any node invalidates approvals of its children/dependents and drops
 affected refined/in_progress stories back to todo. Statuses can never be set
@@ -88,6 +90,12 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "specs_for_path",
 		Description: "Reverse lookup: stories whose declared paths cover a file (exact or folder prefix). Check this before changing a file to find the specs it belongs to."},
 		s.specsForPath)
+	mcp.AddTool(srv, &mcp.Tool{Name: "define_term",
+		Description: "Define or update a project glossary term (term <= 64 chars, definition <= 240 chars). The glossary keeps wording consistent; reuse its exact terms in specs."},
+		s.defineTerm)
+	mcp.AddTool(srv, &mcp.Tool{Name: "delete_term",
+		Description: "Remove a glossary term."},
+		s.deleteTerm)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
 		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
@@ -164,6 +172,11 @@ type setPathsIn struct {
 
 type pathIn struct {
 	Path string `json:"path" jsonschema:"repo-relative file path"`
+}
+
+type termIn struct {
+	Term       string `json:"term"`
+	Definition string `json:"definition,omitempty" jsonschema:"required for define_term; max 240 chars"`
 }
 
 type okOut struct {
@@ -277,6 +290,20 @@ func (s *Server) setPaths(_ context.Context, _ *mcp.CallToolRequest, in setPaths
 func (s *Server) specsForPath(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, []core.StorySummary, error) {
 	stories, err := s.engine.StoriesForPath(in.Path)
 	return nil, stories, err
+}
+
+func (s *Server) defineTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DefineTerm(in.Term, in.Definition); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: "term " + in.Term + " defined"}, nil
+}
+
+func (s *Server) deleteTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn) (*mcp.CallToolResult, okOut, error) {
+	if err := s.engine.DeleteTerm(in.Term); err != nil {
+		return nil, okOut{}, err
+	}
+	return nil, okOut{Message: "term " + in.Term + " deleted"}, nil
 }
 
 func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {
