@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 28
-    AT: 32
+    AS: 29
+    AT: 33
     CC: 4
-    DD: 29
-    IT: 28
-    US: 28
-    UT: 29
+    DD: 30
+    IT: 29
+    US: 29
+    UT: 30
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -70,6 +70,7 @@ counters:
     ac:US-26: 4
     ac:US-27: 4
     ac:US-28: 3
+    ac:US-29: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -900,11 +901,11 @@ stories:
         - id: AS-16
           kind: arch
           title: Scaffold at init, gate at runtime
-          body: init writes the wiring files idempotently (create-if-absent, never overwrite). Hooks delegate to trellis gate <lint|test> --project id, which reads the CURRENT config at run time — reconfiguration needs no hook reinstall. finish stays the authority; hooks are the early warning.
+          body: 'init writes the wiring files idempotently (create-if-absent, never overwrite). Hooks delegate to trellis gate <lint|test> --project id, which reads the CURRENT config at run time — reconfiguration needs no hook reinstall. finish stays the authority; hooks are the early warning. One sanctioned exception (US-29): init ensures the .trellis-worktrees/ ignore line in .gitignore, appending to an existing file, because start depends on it.'
           depends_on:
             - target: CC-1
               pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
-          approved_content_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+          approved_content_hash: 05f1c4f10d894b8d498fa9aae027da33f6fbd80e46f1d1bb7e6d16f1617194a7
           approved_parent_hash: c3929bffa188bf73f09f4970d57e2c8bb4e20219e8cddb29e7a3d66def19d2c9
           children:
             - id: DD-17
@@ -912,7 +913,7 @@ stories:
               title: Scaffold writer and gate command
               body: 'cmd/trellis: scaffold(repo, id) writing .mcp.json/AGENTS.md/hook files with 0755 hooks; gate subcommand resolving the project, running the configured command via sh -c in the repo.'
               approved_content_hash: 2dd889f76d68c5a71a72406e3d87ffa644b615eb1351c2f279781346e1364279
-              approved_parent_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+              approved_parent_hash: 05f1c4f10d894b8d498fa9aae027da33f6fbd80e46f1d1bb7e6d16f1617194a7
               children:
                 - id: UT-17
                   kind: unit_test
@@ -929,7 +930,7 @@ stories:
               title: Scaffold integration
               body: 'Engine/store + temp repo: file creation matrix (absent/present), hook executability, gate exit codes for green, red and unconfigured commands.'
               approved_content_hash: 41e70672a16d5607fba49827142fd41e32c52fcbb91d29b0bd77924bce62b345
-              approved_parent_hash: 8ca74461a8d93bc0a5f4731f79e764727fd9a67abe9306da1607a2884c9b2aaa
+              approved_parent_hash: 05f1c4f10d894b8d498fa9aae027da33f6fbd80e46f1d1bb7e6d16f1617194a7
               evidence:
                 tests:
                     - trellis/cmd/trellis::TestScaffoldIntegration_IT_16
@@ -1977,3 +1978,79 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestKanbanAcceptance_AT_32
             recorded_at: "2026-08-30T13:39:00Z"
+    - id: US-29
+      kind: story
+      title: Init wires and commits its own scaffold
+      body: 'As a human bootstrapping a repo I want trellis init to leave a working setup behind in one step: wiring files committed by init itself, the worktree ignore line in place, and a warning when the trellis binary is not reachable where hooks and MCP config will look for it. Found while bootstrapping the first foreign project: hooks failed off-PATH and the fresh branch gate blocked the manual scaffold commit.'
+      status: done
+      acceptance_criteria:
+        - id: US-29.AC-1
+          given: a git repository being initialized
+          when: trellis init scaffolds wiring files
+          then: init commits the newly created repo files on the current branch itself, bypassing the hooks it just installed — trellis is the authority those hooks defend, so no manual --no-verify bootstrap is needed
+        - id: US-29.AC-2
+          given: a repo whose .gitignore lacks the worktree entry
+          when: trellis init runs
+          then: the .trellis-worktrees/ line is ensured in .gitignore — created or appended, the single sanctioned amendment to an existing file, because start depends on it
+        - id: US-29.AC-3
+          given: a trellis binary not reachable via PATH
+          when: trellis init runs
+          then: init warns that the installed hooks and .mcp.json invoke trellis from PATH and names the fix
+        - id: US-29.AC-4
+          given: nothing newly created, or no git repository
+          when: trellis init runs
+          then: no commit is made — a second init leaves history untouched
+      approved_content_hash: 1d8b4819242bfeb7119f6607dd4af7308eb1a302ea9708a8e4b15a6d758c4d2f
+      children:
+        - id: AS-29
+          kind: arch
+          title: Init finishes what it starts
+          body: 'scaffold reports which repo files it created; init stages exactly those (plus an amended .gitignore) and commits them with --no-verify on the current branch — the same self-authority finish and release already exercise. The ignore line is ensured before hooks are considered. PATH reachability is checked with LookPath and surfaces as a scaffold message, never an error: init must succeed regardless.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: fb00a76fa02857fe42d85fc728c7f082ec6e6f5a5fe6834705435efb51f1b9e0
+          approved_parent_hash: 1d8b4819242bfeb7119f6607dd4af7308eb1a302ea9708a8e4b15a6d758c4d2f
+          children:
+            - id: DD-30
+              kind: detail_design
+              title: Scaffold commit mechanics
+              body: 'cmd/trellis: scaffold returns messages plus created repo-relative file list (hooks excluded); ensureIgnoreLine(repo) creates or appends .trellis-worktrees/; init stages created files and commits with git add + commit --no-verify -m ''trellis init: repo wiring''; LookPath(''trellis'') failure appends a warning message.'
+              approved_content_hash: 1f39910cf0ca8200460fdea847df3360c1db65695384e8423f0e6762820fe1a6
+              approved_parent_hash: fb00a76fa02857fe42d85fc728c7f082ec6e6f5a5fe6834705435efb51f1b9e0
+              children:
+                - id: UT-30
+                  kind: unit_test
+                  title: Bootstrap unit tests
+                  body: Unit-test ensureIgnoreLine (create, append preserving content, no-op when present), the created-files reporting excluding hooks, and the warning message construction.
+                  approved_content_hash: 84be64e9fa657f422ef8f98f62ad990adfe143dec038a3d557272380c345d889
+                  approved_parent_hash: 1f39910cf0ca8200460fdea847df3360c1db65695384e8423f0e6762820fe1a6
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestBootstrapUnit_UT_30
+                    recorded_at: "2026-08-30T14:00:10Z"
+            - id: IT-29
+              kind: integration_test
+              title: Bootstrap integration
+              body: 'Fresh and pre-populated repos through init: wiring commit contents, gitignore create/append/no-op matrix, no-commit cases (nothing new, no git repo), warning emission off-PATH.'
+              approved_content_hash: f70bec1d1d9d62eea3af7433adc2ce5725097b09018b5ce62d18f71ad694ca3f
+              approved_parent_hash: fb00a76fa02857fe42d85fc728c7f082ec6e6f5a5fe6834705435efb51f1b9e0
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestBootstrapIntegration_IT_29
+                recorded_at: "2026-08-30T14:00:10Z"
+        - id: AT-33
+          kind: acceptance_test
+          title: Bootstrap acceptance
+          body: 'Drive the real init entrypoint on a fresh repo: assert the wiring commit on the current branch (containing .mcp.json, AGENTS.md, .gitignore; hooks installed but never committed), a clean worktree afterwards, and that start works immediately without manual ignore editing; assert appending to a pre-existing .gitignore; assert the PATH warning with a stripped PATH; assert a second init creates no commit.'
+          covers:
+            - US-29.AC-1
+            - US-29.AC-2
+            - US-29.AC-3
+            - US-29.AC-4
+          approved_content_hash: 43e85183a42ca9f7dc3ebb5e0d74283ce01b8b21515b001fbd8f844666a0f4a7
+          approved_parent_hash: 1d8b4819242bfeb7119f6607dd4af7308eb1a302ea9708a8e4b15a6d758c4d2f
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestBootstrapAcceptance_AT_33
+            recorded_at: "2026-08-30T14:00:10Z"

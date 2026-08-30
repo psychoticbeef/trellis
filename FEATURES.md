@@ -31,6 +31,7 @@
 - **US-26** — Batch tree approval
 - **US-27** — Atomic mutations
 - **US-28** — Kanban board
+- **US-29** — Init wires and commits its own scaffold
 
 ## Glossary
 
