@@ -126,3 +126,35 @@ func TestBranchAndMerge_UT_7(t *testing.T) {
 		t.Fatal("develop moved despite aborted merge")
 	}
 }
+
+// TestAncestorPairs_UT_10 proves UT-10 (DD-10 "gitops.IsAncestor"): diverged,
+// fast-forwardable and up-to-date branch pairs.
+func TestAncestorPairs_UT_10(t *testing.T) {
+	g, dir := repo(t)
+	git(t, dir, "branch", "feature")
+
+	// Up to date (equal): ancestor in both directions.
+	if ok, err := g.IsAncestor("develop", "feature"); err != nil || !ok {
+		t.Fatalf("equal branches: want true, got %v %v", ok, err)
+	}
+
+	// Fast-forwardable: feature ahead of develop.
+	git(t, dir, "checkout", "feature")
+	commitFile(t, dir, "f.txt", "x", "feature work")
+	if ok, _ := g.IsAncestor("develop", "feature"); !ok {
+		t.Fatal("develop must be ancestor of ahead feature")
+	}
+	if ok, _ := g.IsAncestor("feature", "develop"); ok {
+		t.Fatal("ahead feature must not be ancestor of develop")
+	}
+
+	// Diverged: both moved.
+	git(t, dir, "checkout", "develop")
+	commitFile(t, dir, "d.txt", "y", "base work")
+	if ok, _ := g.IsAncestor("develop", "feature"); ok {
+		t.Fatal("diverged: develop must not be ancestor of feature")
+	}
+	if ok, _ := g.IsAncestor("feature", "develop"); ok {
+		t.Fatal("diverged: feature must not be ancestor of develop")
+	}
+}

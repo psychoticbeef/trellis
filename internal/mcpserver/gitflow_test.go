@@ -114,7 +114,8 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
 		it+": test", "failed", ut+": test", "skipped")
 
-	// Merge conflict: aborted, back on the feature branch, develop untouched.
+	// An advanced base — even a conflicting one — is caught by the up-to-date
+	// gate before any merge is attempted (US-9); develop is never touched.
 	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
 	gitRun(t, repo, "checkout", "develop")
 	if err := os.WriteFile(filepath.Join(repo, "clash.txt"), []byte("develop"), 0o644); err != nil {
@@ -130,17 +131,21 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "conflicting feature work")
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
-		"merge into develop failed", "aborted and returned to feature/"+story)
-	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/"+story {
-		t.Fatalf("after abort on %s, want the feature branch", got)
-	}
+		"finish blocked", "feature/"+story+" is behind develop")
 	if got := gitRun(t, repo, "rev-parse", "develop"); got != baseSHA {
-		t.Fatal("develop moved despite aborted merge")
+		t.Fatal("develop moved although finish was blocked")
 	}
 
-	// Resolve by rebuilding develop without the clash, then finish: merged
-	// --no-ff, branch deleted, story done.
-	gitRun(t, repo, "branch", "-f", "develop", baseSHA+"~1")
+	// Catch up on the feature branch, resolving the conflict there — the
+	// merge into develop afterwards is conflict-free by construction.
+	cmd := exec.Command("git", "merge", "develop", "-m", "catch up")
+	cmd.Dir = repo
+	_ = cmd.Run() // conflict expected
+	if err := os.WriteFile(filepath.Join(repo, "clash.txt"), []byte("resolved"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "resolve conflict on feature branch")
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
 	st, _ := nodeStatus(t, cs, story)
 	if st != "done" {
@@ -207,5 +212,44 @@ func TestLivingDoneTreeAcceptance_AT_10(t *testing.T) {
 	}
 	if st, _ := nodeStatus(t, cs, story); st != "done" {
 		t.Fatal("status must still be done after re-approval")
+	}
+}
+
+// TestUpToDateMergeGateAcceptance_AT_11 proves AT-11 (US-9 "Merge gate: test
+// what will merge") through MCP: an advanced base blocks finish with the
+// catch-up instruction; after merging the base into the feature branch the
+// same finish succeeds.
+func TestUpToDateMergeGateAcceptance_AT_11(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+	story, at, _, it, _, ut := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+
+	gitRun(t, repo, "checkout", "develop")
+	if err := os.WriteFile(filepath.Join(repo, "unrelated.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "base moved")
+	gitRun(t, repo, "checkout", "feature/"+story)
+
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"},
+		"finish blocked", "feature/"+story+" is behind develop", "merge or rebase develop into")
+
+	gitRun(t, repo, "merge", "develop", "-m", "catch up")
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
+	if st, _ := nodeStatus(t, cs, story); st != "done" {
+		t.Fatalf("status = %s, want done", st)
 	}
 }
