@@ -7,6 +7,10 @@ MCP tools (server `trellis`). It is the single source of truth:
 
 - Check `get_overview` before picking up work; work only on stories, never on
   ad-hoc tasks outside a story.
+- Done stories are the context source: before designing or implementing,
+  read the done trees (`get_tree`) and cross-cutting specs that touch your
+  area — they tell you what was built, why, and which tests prove it. Done
+  trees are immutable; supersede them with a new story, never by editing.
 - A story may only be implemented via `transition(story, "start")` and
   completed via `transition(story, "finish")`. Never merge to develop yourself.
 - Test names must reference the spec ids they prove (e.g. `TestFoo_UT_3`

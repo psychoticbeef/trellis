@@ -1,6 +1,7 @@
 package mcpserver_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -154,5 +155,61 @@ func TestGitFlowAcceptance_AT_6(t *testing.T) {
 	}
 	if log := gitRun(t, repo, "log", "--merges", "--oneline", "develop"); !strings.Contains(log, "Merge feature/"+story) {
 		t.Fatalf("develop log missing merge commit:\n%s", log)
+	}
+}
+
+// TestImmutableDoneTreeAcceptance_AT_8 proves AT-8 (US-7 "Done specs as
+// immutable context"): a story driven to done through MCP rejects every tree
+// mutation, its members stay linkable as context, and a cross-cutting edit
+// yields stale markers without leaving done.
+func TestImmutableDoneTreeAcceptance_AT_8(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		LintCmd:   "true",
+		TestCmd:   "rm -rf reports && mkdir -p reports && cp report-src.xml reports/report.xml 2>/dev/null || true",
+		JUnitGlob: "reports/*.xml"})
+
+	cc := call(t, cs, "create_node", map[string]any{"kind": "cross_cutting", "title": "cc", "body": "b"})["id"].(string)
+	approveMCP(t, cs, cc)
+	story, at, arch, it, dd, ut := fullTreeMCP(t, cs)
+	call(t, cs, "link_dependency", map[string]any{"node_id": arch, "target_id": cc})
+	approveMCP(t, cs, arch)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	setReport(t, repo, map[string]string{at: "", it: "", ut: ""})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "finish"})
+
+	// Every mutation on the done tree is rejected with the immutability message.
+	const msg = "immutable context"
+	callErr(t, cs, "create_node", map[string]any{"kind": "detail_design", "parent_id": arch, "title": "x"},
+		"story "+story+" is done", msg)
+	callErr(t, cs, "update_node", map[string]any{"id": dd, "body": "x"}, msg)
+	callErr(t, cs, "delete_node", map[string]any{"id": ut}, msg)
+	callErr(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g", "when": "w", "then": "t"}, msg)
+	callErr(t, cs, "update_acceptance_criterion", map[string]any{"ac_id": story + ".AC-1", "then": "x"}, msg)
+	callErr(t, cs, "delete_acceptance_criterion", map[string]any{"ac_id": story + ".AC-1"}, msg)
+	callErr(t, cs, "link_dependency", map[string]any{"node_id": arch, "target_id": cc}, msg)
+
+	// Done members remain linkable as context from other stories.
+	story2 := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "s2"})["id"].(string)
+	arch2 := call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": story2, "title": "as2"})["id"].(string)
+	call(t, cs, "link_dependency", map[string]any{"node_id": arch2, "target_id": arch})
+
+	// Cross-cutting edit: honest stale markers, story stays done.
+	call(t, cs, "update_node", map[string]any{"id": cc, "body": "changed"})
+	st, _ := nodeStatus(t, cs, story)
+	if st != "done" {
+		t.Fatalf("status = %s, done stories must not reopen", st)
+	}
+	tree := call(t, cs, "get_tree", map[string]any{"story_id": story})
+	report, _ := json.Marshal(tree)
+	if !strings.Contains(string(report), arch+" stale: dependency "+cc) {
+		t.Fatalf("done tree must show the stale marker:\n%s", report)
 	}
 }

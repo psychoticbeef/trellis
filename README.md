@@ -49,9 +49,13 @@ todo --refine--> refined --start--> in_progress --finish--> done
   `UT-3` iff its name contains `UT-3` or `UT_3`. Then merges `--no-ff` into
   the base branch and deletes the feature branch.
 
-Statuses can never be set directly; only transitions move them. `done` means
-the truth lives in merged code and tests — done trees can be deleted
-(`trellis prune`). No war stories.
+Statuses can never be set directly; only transitions move them. Done trees
+are the durable context source: traceability from acceptance criteria to
+architecture to test evidence for everything that was built. They are
+immutable — every edit inside a done tree is rejected; cross-cutting changes
+mark dependent done specs stale without reopening them. When a feature leaves
+the product, `trellis prune` removes its tree whole. No war stories: content
+is either current context or deleted.
 
 ## Setup
 

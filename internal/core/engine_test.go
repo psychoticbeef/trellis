@@ -644,3 +644,58 @@ func TestGuardProblemLines_UT_5(t *testing.T) {
 		t.Fatalf("status = %s, want refined", got)
 	}
 }
+
+// TestDoneTreeGuards_UT_8 proves UT-8 (DD-8 "guardDoneTree helper"): every
+// guarded mutation on a done tree is rejected with the immutability message;
+// linking TO a done member stays allowed; non-done stories are unaffected.
+// The done state is test setup written through the store layer — the engine
+// itself exposes no status writer.
+func TestDoneTreeGuards_UT_8(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "test", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if err := st.SetNodeStatus("p1", tr.story, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	const msg = "immutable context"
+	body := "x"
+
+	_, err = e.CreateNode(model.KindDetailDesign, tr.arch, "new dd", "", nil)
+	wantErr(t, err, "story "+tr.story+" is done", msg)
+	_, err = e.UpdateNode(tr.dd, nil, &body, nil)
+	wantErr(t, err, msg)
+	err = e.DeleteNode(tr.ut)
+	wantErr(t, err, msg)
+	_, err = e.AddAC(tr.story, "g", "w", "t")
+	wantErr(t, err, msg)
+	_, err = e.UpdateAC(tr.story+".AC-1", &body, nil, nil)
+	wantErr(t, err, msg)
+	err = e.DeleteAC(tr.story + ".AC-1")
+	wantErr(t, err, msg)
+
+	// Linking FROM a done member is rejected; TO a done member is allowed.
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	err = e.LinkDep(tr.arch, cc.ID)
+	wantErr(t, err, msg)
+	other := fullTree(t, e)
+	if err := e.LinkDep(other.arch, tr.arch); err != nil {
+		t.Fatalf("linking TO a done tree member must work: %v", err)
+	}
+
+	// Non-done stories stay fully mutable.
+	if _, err := e.UpdateNode(other.dd, nil, &body, nil); err != nil {
+		t.Fatalf("mutation on non-done story must pass the guard: %v", err)
+	}
+}
