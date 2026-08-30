@@ -39,6 +39,7 @@ Usage:
   trellis affected <project-id> <path>                         stories declaring a file/folder
   trellis board <project-id> [-o <file>] [--serve [--addr]]    write or serve the HTML spec board
   trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
+  trellis release <project-id>                                 merge base into release with feature manifest
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
 `
@@ -77,6 +78,8 @@ func run(args []string) error {
 		return cmdBoard(rest)
 	case "gate":
 		return cmdGate(rest)
+	case "release":
+		return cmdRelease(rest)
 	case "--version", "version":
 		fmt.Println("trellis", version)
 		return nil
@@ -188,6 +191,7 @@ func cmdConfig(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch")
+	release := fs.String("release", "", "release branch (default main)")
 	lint := fs.String("lint", "", "lint command (run before merge)")
 	test := fs.String("test", "", "test command (must write junit xml)")
 	junit := fs.String("junit", "", "junit report glob, relative to repo")
@@ -211,6 +215,7 @@ func cmdConfig(args []string) error {
 	}
 	set(&p.RepoPath, *repo)
 	set(&p.BaseBranch, *base)
+	set(&p.ReleaseBranch, *release)
 	set(&p.LintCmd, *lint)
 	set(&p.TestCmd, *test)
 	set(&p.JUnitGlob, *junit)
@@ -219,8 +224,8 @@ func cmdConfig(args []string) error {
 			return err
 		}
 	}
-	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
-		p.ID, p.Name, p.RepoPath, p.BaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
+	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nrelease:  %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
+		p.ID, p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
 	return nil
 }
 
@@ -353,6 +358,23 @@ func cmdBoard(args []string) error {
 		return err
 	}
 	fmt.Printf("board written to %s\n", *out)
+	return nil
+}
+
+func cmdRelease(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: trellis release <project-id>")
+	}
+	e, st, err := engine(args[0])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	msg, err := e.Release()
+	if err != nil {
+		return err
+	}
+	fmt.Println(msg)
 	return nil
 }
 

@@ -18,16 +18,18 @@ import (
 	"trellis/internal/store"
 )
 
-func gitRun(t *testing.T, dir string, args ...string) {
+func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 
 // TestPruneCLIAcceptance_AT_7 proves AT-7 (US-5 "Story state machine with
@@ -325,5 +327,132 @@ func TestLiveBoardCLIAcceptance_AT_22(t *testing.T) {
 	static, _ := os.ReadFile(out)
 	if !strings.Contains(string(static), "served story") || strings.Contains(string(static), "EventSource") {
 		t.Fatal("static export wrong: must show data, must not carry reload script")
+	}
+}
+
+// TestReleaseCLIAcceptance_AT_26 proves AT-26 (US-22 "Release cut with
+// feature manifest") through the real CLI entrypoint.
+func TestReleaseCLIAcceptance_AT_26(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/><testcase name="Test_AT_2"/><testcase name="Test_IT_2"/><testcase name="Test_UT_2"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildDone := func(title string) string {
+		t.Helper()
+		s, _ := e.CreateNode(model.KindStory, "", title, "", nil)
+		e.AddAC(s.ID, "g", "w", "t")
+		at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+		arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+		it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+		dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+		ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+		for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+			r, err := e.Node(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Approve(id, r.Hash, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, verb := range []string{"refine", "start"} {
+			if _, err := e.Transition(s.ID, verb); err != nil {
+				t.Fatalf("%s: %v", verb, err)
+			}
+		}
+		wt := filepath.Join(repo, ".trellis-worktrees", s.ID)
+		if err := os.WriteFile(filepath.Join(wt, s.ID+".txt"), []byte("impl"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, wt, "add", ".")
+		gitRun(t, wt, "commit", "-m", "implement "+s.ID)
+		if _, err := e.Transition(s.ID, "finish"); err != nil {
+			t.Fatalf("finish: %v", err)
+		}
+		return s.ID
+	}
+
+	// Nothing to release yet.
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "nothing to release") {
+		t.Fatalf("want nothing-to-release, got %v", err)
+	}
+
+	first := buildDone("first feature")
+	e.DefineTerm("gate", "guard that blocks a transition")
+
+	// Dirty worktree blocks.
+	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "not clean") {
+		t.Fatalf("want dirty block, got %v", err)
+	}
+	os.Remove(filepath.Join(repo, "dirty.txt"))
+
+	// Stale specs block.
+	body := "edited"
+	if _, err := e.UpdateNode(first, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"release", "p1"}); err == nil || !strings.Contains(err.Error(), "honest context") {
+		t.Fatalf("want stale block, got %v", err)
+	}
+	r, _ := e.Node(first)
+	if err := e.Approve(first, r.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Re-approve the stale children (story hash changed).
+	for _, id := range []string{"AT-1", "AS-1"} {
+		n, _ := e.Node(id)
+		if !n.Fresh {
+			if err := e.Approve(id, n.Hash, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// First release.
+	if err := run([]string{"release", "p1"}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	manifest := gitRun(t, repo, "show", "main:FEATURES.md")
+	for _, want := range []string{"first feature", "# Glossary", "gate"} {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("manifest missing %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, "FEATURES.md")); err == nil {
+		t.Fatal("FEATURES.md leaked onto the base branch")
+	}
+
+	// Incremental release lists only the new feature in the merge message.
+	second := buildDone("second feature")
+	if err := run([]string{"release", "p1"}); err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	log := gitRun(t, repo, "log", "--merges", "--pretty=%B", "-1", "main")
+	if !strings.Contains(log, second+" — second feature") || strings.Contains(log, first+" — first feature") {
+		t.Fatalf("incremental merge message wrong:\n%s", log)
 	}
 }
