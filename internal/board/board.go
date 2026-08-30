@@ -6,11 +6,14 @@ package board
 import (
 	"fmt"
 	"html/template"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"trellis/internal/core"
 	"trellis/internal/model"
+	"trellis/internal/store"
 )
 
 type nodeView struct {
@@ -18,7 +21,7 @@ type nodeView struct {
 	Kind     string
 	KindName string
 	Title    string
-	Body     string
+	BodyHTML template.HTML
 	Fresh    bool
 	Problems []string
 	Covers   []string
@@ -33,11 +36,11 @@ type nodeView struct {
 type storyView struct {
 	ID       string
 	Title    string
-	Body     string
+	BodyHTML template.HTML
 	Status   string
 	StatusCl string
 	Fresh    bool
-	ACs      []core.ACInfo
+	ACs      []acView
 	Children []nodeView
 	Blocked  []string
 	Paths    []string
@@ -46,15 +49,30 @@ type storyView struct {
 type ccView struct {
 	ID       string
 	Title    string
-	Body     string
+	BodyHTML template.HTML
 	Accepted bool
 }
 
+type acView struct {
+	ID        string
+	GivenHTML template.HTML
+	WhenHTML  template.HTML
+	ThenHTML  template.HTML
+	CoveredBy []string
+}
+
+type termView struct {
+	Term       string
+	Anchor     string
+	Definition string
+}
+
 type page struct {
-	Project string
-	Stamp   string
-	Stories []storyView
-	CCs     []ccView
+	Project  string
+	Stamp    string
+	Stories  []storyView
+	CCs      []ccView
+	Glossary []termView
 }
 
 var kindNames = map[string]string{
@@ -63,19 +81,88 @@ var kindNames = map[string]string{
 	"unit_test": "Unit test", "cross_cutting": "Cross-cutting",
 }
 
+// termifier marks glossary-term occurrences in already-escaped text with
+// hover definitions linking to the glossary section.
+type termifier struct {
+	re      *regexp.Regexp
+	anchors map[string]string // lowercased term -> anchor
+	defs    map[string]string // lowercased term -> definition
+}
+
+func anchorFor(term string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(term) {
+		if ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return "gloss-" + b.String()
+}
+
+func newTermifier(terms []store.TermDef) *termifier {
+	if len(terms) == 0 {
+		return &termifier{}
+	}
+	sorted := append([]store.TermDef(nil), terms...)
+	// Longest first so overlapping terms prefer the more specific one.
+	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i].Term) > len(sorted[j].Term) })
+	tf := &termifier{anchors: map[string]string{}, defs: map[string]string{}}
+	var alts []string
+	for _, td := range sorted {
+		// Match against escaped text: escape the term the same way.
+		escaped := template.HTMLEscapeString(td.Term)
+		alts = append(alts, regexp.QuoteMeta(escaped))
+		key := strings.ToLower(td.Term)
+		tf.anchors[key] = anchorFor(td.Term)
+		tf.defs[key] = td.Definition
+	}
+	tf.re = regexp.MustCompile(`(?i)\b(` + strings.Join(alts, "|") + `)\b`)
+	return tf
+}
+
+// markup escapes text and wraps term occurrences in glossary links.
+func (tf *termifier) markup(text string) template.HTML {
+	escaped := template.HTMLEscapeString(text)
+	if tf.re == nil {
+		return template.HTML(escaped)
+	}
+	out := tf.re.ReplaceAllStringFunc(escaped, func(m string) string {
+		// m is escaped text; recover the lookup key from the unescaped form.
+		key := strings.ToLower(htmlUnescape(m))
+		anchor, ok := tf.anchors[key]
+		if !ok {
+			return m
+		}
+		return `<a class="term" href="#` + anchor + `" title="` +
+			template.HTMLEscapeString(tf.defs[key]) + `">` + m + `</a>`
+	})
+	return template.HTML(out)
+}
+
+func htmlUnescape(s string) string {
+	r := strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">", "&#34;", `"`, "&#39;", "'")
+	return r.Replace(s)
+}
+
 // Render produces the full board HTML for one project.
 func Render(e *core.Engine) (string, error) {
 	overview, err := e.Overview()
 	if err != nil {
 		return "", err
 	}
+	tf := newTermifier(overview.Glossary)
 	p := page{Project: e.Project.ID, Stamp: time.Now().Format("2006-01-02 15:04")}
+	for _, td := range overview.Glossary {
+		p.Glossary = append(p.Glossary, termView{Term: td.Term, Anchor: anchorFor(td.Term), Definition: td.Definition})
+	}
 	for _, cc := range overview.CrossCutting {
 		n, err := e.Node(cc.ID)
 		if err != nil {
 			return "", err
 		}
-		p.CCs = append(p.CCs, ccView{ID: cc.ID, Title: cc.Title, Body: n.Body, Accepted: cc.Accepted})
+		p.CCs = append(p.CCs, ccView{ID: cc.ID, Title: cc.Title, BodyHTML: tf.markup(n.Body), Accepted: cc.Accepted})
 	}
 	for _, s := range overview.Stories {
 		tree, err := e.Tree(s.ID)
@@ -87,12 +174,16 @@ func Render(e *core.Engine) (string, error) {
 			return "", err
 		}
 		sv := storyView{
-			ID: s.ID, Title: s.Title, Body: story.Body, Status: s.Status,
+			ID: s.ID, Title: s.Title, BodyHTML: tf.markup(story.Body), Status: s.Status,
 			StatusCl: strings.ReplaceAll(s.Status, "_", ""), Fresh: tree.Story.Fresh,
-			ACs: tree.ACs, Blocked: tree.Integrity, Paths: story.Paths,
+			Blocked: tree.Integrity, Paths: story.Paths,
+		}
+		for _, ac := range tree.ACs {
+			sv.ACs = append(sv.ACs, acView{ID: ac.ID, GivenHTML: tf.markup(ac.Given),
+				WhenHTML: tf.markup(ac.When), ThenHTML: tf.markup(ac.Then), CoveredBy: ac.CoveredBy})
 		}
 		for _, c := range tree.Story.Children {
-			cv, err := viewNode(e, c, 1)
+			cv, err := viewNode(e, tf, c, 1)
 			if err != nil {
 				return "", err
 			}
@@ -107,19 +198,22 @@ func Render(e *core.Engine) (string, error) {
 	return b.String(), nil
 }
 
-func viewNode(e *core.Engine, tn core.TreeNode, depth int) (nodeView, error) {
+func viewNode(e *core.Engine, tf *termifier, tn core.TreeNode, depth int) (nodeView, error) {
 	full, err := e.Node(tn.ID)
 	if err != nil {
 		return nodeView{}, err
 	}
 	nv := nodeView{
 		ID: tn.ID, Kind: tn.Kind, KindName: kindNames[tn.Kind], Title: tn.Title,
-		Body: full.Body, Fresh: tn.Fresh, Problems: tn.Problems, Covers: tn.Covers,
+		BodyHTML: tf.markup(full.Body), Fresh: tn.Fresh, Problems: tn.Problems, Covers: tn.Covers,
 		Paths: tn.Paths, Deps: tn.Deps, Evidence: tn.Evidence, Depth: depth,
 		IsTest: model.TestSpecKinds[model.Kind(tn.Kind)],
 	}
+	if full.Body == "" {
+		nv.BodyHTML = ""
+	}
 	for _, c := range tn.Children {
-		cv, err := viewNode(e, c, depth+1)
+		cv, err := viewNode(e, tf, c, depth+1)
 		if err != nil {
 			return nodeView{}, err
 		}
@@ -200,6 +294,8 @@ tr:last-child td { border-bottom: none; }
 .evidence .mono { color: var(--done); }
 .gates { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
 a { color: var(--accent); }
+a.term { color: inherit; text-decoration: underline dotted var(--accent); text-underline-offset: 2px; }
+a.term:hover { color: var(--accent); }
 </style></head><body>
 <div class="wrap">
 <h1><span>trellis</span> board</h1>
@@ -208,17 +304,21 @@ a { color: var(--accent); }
 {{range .Stories}}<a class="chip" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span></a>
 {{end}}</nav>
 
+{{if .Glossary}}<section id="glossary"><h2>Glossary</h2><table><tbody>
+{{range .Glossary}}<tr id="{{.Anchor}}"><td class="mono">{{.Term}}</td><td>{{.Definition}}</td></tr>
+{{end}}</tbody></table></section>{{end}}
+
 <section><h2>Cross-cutting architecture</h2>
-{{range .CCs}}<details class="node d1" id="{{.ID}}" open><summary><span class="mono nid">{{.ID}}</span><span class="kind">Cross-cutting</span> {{.Title}} {{if .Accepted}}<span class="mark ok">accepted</span>{{else}}<span class="mark stale">draft / stale</span>{{end}}</summary><div class="body">{{.Body}}</div></details>
+{{range .CCs}}<details class="node d1" id="{{.ID}}" open><summary><span class="mono nid">{{.ID}}</span><span class="kind">Cross-cutting</span> {{.Title}} {{if .Accepted}}<span class="mark ok">accepted</span>{{else}}<span class="mark stale">draft / stale</span>{{end}}</summary><div class="body">{{.BodyHTML}}</div></details>
 {{end}}</section>
 
 {{range .Stories}}
 <section id="{{.ID}}">
 <h2><span class="mono">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}</h2>
-<p class="storybody">{{.Body}}</p>
+<p class="storybody">{{.BodyHTML}}</p>
 {{if .Paths}}<p class="meta">code: <span class="mono">{{join .Paths}}</span></p>{{end}}
 {{if .ACs}}<table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
-{{range .ACs}}<tr><td class="mono">{{.ID}}</td><td><span class="gwt">Given</span> {{.Given}}<br><span class="gwt">When</span> {{.When}}<br><span class="gwt">Then</span> {{.Then}}</td><td class="mono cov">{{join .CoveredBy}}</td></tr>
+{{range .ACs}}<tr><td class="mono">{{.ID}}</td><td><span class="gwt">Given</span> {{.GivenHTML}}<br><span class="gwt">When</span> {{.WhenHTML}}<br><span class="gwt">Then</span> {{.ThenHTML}}</td><td class="mono cov">{{join .CoveredBy}}</td></tr>
 {{end}}</tbody></table>{{end}}
 {{range .Children}}{{template "node" .}}{{end}}
 {{if .Blocked}}<p class="gates stale">blocked</p>{{range .Blocked}}<div class="problem">{{.}}</div>{{end}}{{else}}<p class="gates ok">gates open</p>{{end}}
@@ -230,7 +330,7 @@ a { color: var(--accent); }
 <summary><span class="mono nid">{{.ID}}</span><span class="kind">{{.KindName}}</span> {{.Title}}
 {{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}
 <span class="meta">{{if .Covers}} · covers <span class="mono">{{join .Covers}}</span>{{end}}{{range .Deps}} · needs <a class="mono {{if .Fresh}}ok{{else}}stale{{end}}" href="#{{.Target}}">{{.Target}}</a>{{end}}</span></summary>
-{{if .Body}}<div class="body">{{.Body}}</div>{{end}}
+{{if .BodyHTML}}<div class="body">{{.BodyHTML}}</div>{{end}}
 {{if .Evidence}}<div class="evidence">proved by <span class="mono">{{join .Evidence.Tests}}</span> · {{.Evidence.RecordedAt}}</div>{{else if .IsTest}}<div class="evidence stale">no test evidence recorded yet</div>{{end}}
 {{range .Problems}}<div class="problem">{{.}}</div>{{end}}
 </details>

@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"trellis/internal/model"
+	"trellis/internal/store"
 )
 
 // freshness decides whether a node's approval is still valid. A node is fresh
@@ -386,14 +387,20 @@ type CCSummary struct {
 }
 
 type Overview struct {
-	Project      string         `json:"project"`
-	Stories      []StorySummary `json:"stories"`
-	CrossCutting []CCSummary    `json:"cross_cutting"`
-	StaleNodes   []string       `json:"stale_nodes"`
+	Project      string          `json:"project"`
+	Stories      []StorySummary  `json:"stories"`
+	CrossCutting []CCSummary     `json:"cross_cutting"`
+	Glossary     []store.TermDef `json:"glossary"`
+	StaleNodes   []string        `json:"stale_nodes"`
 }
 
 func (e *Engine) Overview() (Overview, error) {
-	o := Overview{Project: e.Project.Name, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, StaleNodes: []string{}}
+	o := Overview{Project: e.Project.Name, Stories: []StorySummary{}, CrossCutting: []CCSummary{}, Glossary: []store.TermDef{}, StaleNodes: []string{}}
+	if terms, err := e.st.ListTerms(e.pid()); err != nil {
+		return o, err
+	} else if terms != nil {
+		o.Glossary = terms
+	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {
 		return o, err

@@ -19,5 +19,7 @@ MCP tools (server `trellis`). It is the single source of truth:
   parked on develop and rejects direct commits.
 - Test names must reference the spec ids they prove (e.g. `TestFoo_UT_3`
   proves UT-3).
+- Check the glossary (`get_overview`) and reuse its exact wording in every
+  spec; define new project terms with `define_term`, ultra short.
 - Build the binary with `go build -o bin/trellis ./cmd/trellis` if
   `bin/trellis` is missing.

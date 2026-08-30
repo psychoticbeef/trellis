@@ -137,3 +137,67 @@ func TestBoardIntegration_IT_15(t *testing.T) {
 		}
 	}
 }
+
+// TestGlossaryIntegration_IT_21 proves IT-21 (US-21): define/redefine/delete
+// roundtrip with limits, overview inclusion, and board rendering with term
+// marking across story bodies and AC text.
+func TestGlossaryIntegration_IT_21(t *testing.T) {
+	e, _ := newEngine(t)
+
+	if err := e.DefineTerm("spec tree", "one story's hierarchy of spec nodes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DefineTerm("gate", "first def"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DefineTerm("gate", "guard that blocks a transition"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DefineTerm("x", strings.Repeat("y", 241)); err == nil {
+		t.Fatal("over-long definition must be rejected")
+	}
+	if err := e.DefineTerm(strings.Repeat("t", 65), "d"); err == nil {
+		t.Fatal("over-long term must be rejected")
+	}
+	if err := e.DeleteTerm("nope"); err == nil {
+		t.Fatal("deleting unknown term must error")
+	}
+
+	o, err := e.Overview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.Glossary) != 2 || o.Glossary[0].Term != "gate" ||
+		o.Glossary[0].Definition != "guard that blocks a transition" {
+		t.Fatalf("overview glossary: %+v", o.Glossary)
+	}
+
+	// Board: glossary section plus marked occurrences in body and AC.
+	s, err := e.CreateNode(model.KindStory, "", "s", "every gate protects the spec tree", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AddAC(s.ID, "an open gate", "w", "t"); err != nil {
+		t.Fatal(err)
+	}
+	html, err := board.Render(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`id="glossary"`, `id="gloss-gate"`,
+		`href="#gloss-spec-tree"`,
+		`title="guard that blocks a transition">gate</a> protects`,
+		`>gate</a></td>`, // no such fragment in AC cell; checked below instead
+	} {
+		if want == `>gate</a></td>` {
+			continue
+		}
+		if !strings.Contains(html, want) {
+			t.Errorf("board missing %q", want)
+		}
+	}
+	if !strings.Contains(html, `an open <a class="term" href="#gloss-gate"`) {
+		t.Error("AC text not term-marked")
+	}
+}

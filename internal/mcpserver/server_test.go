@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"trellis/internal/board"
 	"trellis/internal/core"
 	"trellis/internal/mcpserver"
 	"trellis/internal/store"
@@ -32,10 +33,12 @@ func clientFor(t *testing.T, p store.Project) *mcp.ClientSession {
 	if err := st.CreateProject(p); err != nil {
 		t.Fatal(err)
 	}
+	lastEngine = nil
 	engine, err := core.NewEngine(st, p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	lastEngine = engine
 	ct, srvT := mcp.NewInMemoryTransports()
 	srv := mcpserver.New(engine, "test")
 	ctx := context.Background()
@@ -483,4 +486,56 @@ func TestFTSSearchAcceptance_AT_23(t *testing.T) {
 			t.Fatalf("hostile query %q misbehaved: %v", q, hits)
 		}
 	}
+}
+
+// TestGlossaryAcceptance_AT_25 proves AT-25 (US-21 "Project glossary")
+// through MCP: define with limit rejections, redefine, delete, overview
+// inclusion — plus the board rendering with marked terms via the engine.
+func TestGlossaryAcceptance_AT_25(t *testing.T) {
+	cs := client(t)
+
+	call(t, cs, "define_term", map[string]any{"term": "evidence", "definition": "recorded proving tests per test spec"})
+	call(t, cs, "define_term", map[string]any{"term": "evidence", "definition": "the proving tests recorded at finish"})
+	callErr(t, cs, "define_term", map[string]any{"term": "wall", "definition": strings.Repeat("x", 300)},
+		"exceeds 240 characters", "ultra short")
+	callErr(t, cs, "define_term", map[string]any{"term": strings.Repeat("t", 70), "definition": "d"},
+		"exceeds 64 characters")
+	call(t, cs, "define_term", map[string]any{"term": "doomed", "definition": "to be deleted"})
+	call(t, cs, "delete_term", map[string]any{"term": "doomed"})
+	callErr(t, cs, "delete_term", map[string]any{"term": "doomed"}, "not found")
+
+	o := call(t, cs, "get_overview", map[string]any{})
+	blob, _ := json.Marshal(o["glossary"])
+	if !strings.Contains(string(blob), "the proving tests recorded at finish") {
+		t.Fatalf("overview glossary wrong: %s", blob)
+	}
+	if strings.Contains(string(blob), "doomed") {
+		t.Fatalf("deleted term still listed: %s", blob)
+	}
+
+	// Board: glossary section and hover-marked, linked occurrences.
+	call(t, cs, "create_node", map[string]any{"kind": "story", "title": "s", "body": "check the evidence after finish"})
+	html := renderBoard(t, cs)
+	for _, want := range []string{`id="glossary"`, `id="gloss-evidence"`,
+		`href="#gloss-evidence" title="the proving tests recorded at finish">evidence</a>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("board missing %q", want)
+		}
+	}
+}
+
+// lastEngine lets acceptance tests reach the engine behind the MCP session
+// for surfaces that are human-facing (the board), not part of the tool API.
+var lastEngine *core.Engine
+
+func renderBoard(t *testing.T, _ *mcp.ClientSession) string {
+	t.Helper()
+	if lastEngine == nil {
+		t.Fatal("no engine captured")
+	}
+	html, err := board.Render(lastEngine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return html
 }

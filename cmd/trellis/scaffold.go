@@ -55,6 +55,8 @@ MCP tools (server "trellis"). It is the single source of truth:
 - Implement only via transition(story, "start") and complete via "finish".
   Never merge to the base branch yourself.
 - Test names must reference the spec ids they prove (e.g. TestFoo_UT_3).
+- Check the glossary (get_overview) and reuse its exact wording in every
+  spec; define new project terms with define_term, ultra short.
 `, projectID), 0o644)
 
 	if fi, err := os.Stat(filepath.Join(repo, ".git")); err == nil && fi.IsDir() {
