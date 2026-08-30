@@ -103,6 +103,9 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_term",
 		Description: "Remove a glossary term."},
 		s.deleteTerm)
+	mcp.AddTool(srv, &mcp.Tool{Name: "audit",
+		Description: "Bidirectional repo-wide validation: re-verifies every done story's tests and paths, flags tests referencing nonexistent specs (violations), lists unbound tests and unclaimed files (informational). Runs the test command; never mutates."},
+		s.audit)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
 		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
@@ -362,6 +365,11 @@ func (s *Server) deleteTerm(_ context.Context, _ *mcp.CallToolRequest, in termIn
 		return nil, okOut{}, err
 	}
 	return nil, okOut{Message: "term " + in.Term + " deleted"}, nil
+}
+
+func (s *Server) audit(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, core.AuditReport, error) {
+	rep, err := s.engine.Audit()
+	return nil, rep, err
 }
 
 func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {
