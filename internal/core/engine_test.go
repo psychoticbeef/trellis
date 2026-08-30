@@ -645,12 +645,10 @@ func TestGuardProblemLines_UT_5(t *testing.T) {
 	}
 }
 
-// TestDoneTreeGuards_UT_8 proves UT-8 (DD-8 "guardDoneTree helper"): every
-// guarded mutation on a done tree is rejected with the immutability message;
-// linking TO a done member stays allowed; non-done stories are unaffected.
-// The done state is test setup written through the store layer — the engine
-// itself exposes no status writer.
-func TestDoneTreeGuards_UT_8(t *testing.T) {
+// TestDoneMutability_UT_9 proves UT-9 (DD-9 "Transition-only done semantics"):
+// each mutation op succeeds against a done story, downgrade skips done, and
+// re-approval clears staleness. Done state is store-level test setup.
+func TestDoneMutability_UT_9(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -668,34 +666,38 @@ func TestDoneTreeGuards_UT_8(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const msg = "immutable context"
 	body := "x"
-
-	_, err = e.CreateNode(model.KindDetailDesign, tr.arch, "new dd", "", nil)
-	wantErr(t, err, "story "+tr.story+" is done", msg)
-	_, err = e.UpdateNode(tr.dd, nil, &body, nil)
-	wantErr(t, err, msg)
-	err = e.DeleteNode(tr.ut)
-	wantErr(t, err, msg)
-	_, err = e.AddAC(tr.story, "g", "w", "t")
-	wantErr(t, err, msg)
-	_, err = e.UpdateAC(tr.story+".AC-1", &body, nil, nil)
-	wantErr(t, err, msg)
-	err = e.DeleteAC(tr.story + ".AC-1")
-	wantErr(t, err, msg)
-
-	// Linking FROM a done member is rejected; TO a done member is allowed.
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got := status(t, e, tr.story); got != "done" {
+		t.Fatalf("downgrade must skip done, got %s", got)
+	}
+	extra := mustCreate(t, e, model.KindUnitTest, tr.dd, "extra", nil)
+	if err := e.DeleteNode(extra.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	ac, err := e.AddAC(tr.story, "g2", "w2", "t2")
+	if err != nil {
+		t.Fatalf("AC add: %v", err)
+	}
+	if _, err := e.UpdateAC(ac.ID, nil, &body, nil); err != nil {
+		t.Fatalf("AC update: %v", err)
+	}
+	if err := e.DeleteAC(ac.ID); err != nil {
+		t.Fatalf("AC delete: %v", err)
+	}
 	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
 	approve(t, e, cc.ID)
-	err = e.LinkDep(tr.arch, cc.ID)
-	wantErr(t, err, msg)
-	other := fullTree(t, e)
-	if err := e.LinkDep(other.arch, tr.arch); err != nil {
-		t.Fatalf("linking TO a done tree member must work: %v", err)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatalf("link from done tree: %v", err)
 	}
 
-	// Non-done stories stay fully mutable.
-	if _, err := e.UpdateNode(other.dd, nil, &body, nil); err != nil {
-		t.Fatalf("mutation on non-done story must pass the guard: %v", err)
+	// Re-approval clears the staleness the edits caused.
+	approve(t, e, tr.dd)
+	approve(t, e, tr.ut)
+	approve(t, e, tr.arch)
+	if n, _ := e.Node(tr.dd); !n.Fresh {
+		t.Fatalf("dd must be fresh after re-approval: %v", n.Problems)
 	}
 }
