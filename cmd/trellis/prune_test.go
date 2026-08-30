@@ -564,3 +564,135 @@ func TestServedBoardsAcceptance_AT_27(t *testing.T) {
 		t.Fatal("serve did not exit after stdin EOF")
 	}
 }
+
+// TestExportImportCLIAcceptance_AT_29 proves AT-29 (US-25 "YAML export and
+// import") through the real CLI entrypoint: export, import as a new
+// project, round trip, counters, and the release backup.
+func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/></testsuite>`
+	if err := os.WriteFile(filepath.Join(repo, "report-src.xml"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "orig", RepoPath: repo, BaseBranch: "develop",
+		Description: "spec tracking", LintCmd: "true",
+		TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A done story with evidence plus glossary.
+	s, _ := e.CreateNode(model.KindStory, "", "first feature", "", nil)
+	e.AddAC(s.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		r, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, r.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, verb := range []string{"refine", "start"} {
+		if _, err := e.Transition(s.ID, verb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt := filepath.Join(repo, ".trellis-worktrees", s.ID)
+	if err := os.WriteFile(filepath.Join(wt, "impl.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "impl")
+	if _, err := e.Transition(s.ID, "finish"); err != nil {
+		t.Fatal(err)
+	}
+	e.DefineTerm("gate", "guard that blocks a transition")
+	st.Close()
+
+	// Export via CLI, import as a new project, export again: round trip.
+	out1 := filepath.Join(t.TempDir(), "one.yaml")
+	if err := run([]string{"export", "p1", "-o", out1}); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if err := run([]string{"import", "-f", out1, "--name", "orig", "--repo", repo}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	st2, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, _ := st2.ListProjects()
+	var copied string
+	for _, p := range projects {
+		if p.ID != "p1" {
+			copied = p.ID
+		}
+	}
+	st2.Close()
+	if copied == "" {
+		t.Fatal("imported project not found")
+	}
+	out2 := filepath.Join(t.TempDir(), "two.yaml")
+	if err := run([]string{"export", copied, "-o", out2}); err != nil {
+		t.Fatalf("re-export: %v", err)
+	}
+	b1, _ := os.ReadFile(out1)
+	b2, _ := os.ReadFile(out2)
+	if string(b1) != string(b2) {
+		t.Fatalf("round trip diverged:\n%s\n---\n%s", b1, b2)
+	}
+	if !strings.Contains(string(b1), "recorded_at") || !strings.Contains(string(b1), "gate") {
+		t.Fatal("export missing evidence or glossary")
+	}
+
+	// Counters preserved: next story id in the copy continues.
+	st3, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st3.Close()
+	e3, err := core.NewEngine(st3, copied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := e3.CreateNode(model.KindStory, "", "next", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.ID != "US-2" {
+		t.Fatalf("counter lost: %s, want US-2", n.ID)
+	}
+	if err := e3.DeleteNode(n.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Release commits the backup on the release branch only.
+	if err := run([]string{"release", "p1"}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if out := gitRun(t, repo, "show", "main:trellis-specs.yaml"); !strings.Contains(out, "trellis_export: 1") {
+		t.Fatal("backup missing on release branch")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "trellis-specs.yaml")); err == nil {
+		t.Fatal("backup leaked onto the base branch")
+	}
+}

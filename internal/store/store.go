@@ -226,6 +226,33 @@ func (s *Store) NextID(projectID, scope string) (int, error) {
 	return n, tx.Commit()
 }
 
+// ListCounters returns every id counter of a project (scope -> value).
+func (s *Store) ListCounters(projectID string) (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT scope, n FROM counters WHERE project_id=?`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var scope string
+		var n int
+		if err := rows.Scan(&scope, &n); err != nil {
+			return nil, err
+		}
+		out[scope] = n
+	}
+	return out, rows.Err()
+}
+
+// SetCounter overwrites one id counter — used by import to preserve
+// monotonicity so restored projects never reuse ids.
+func (s *Store) SetCounter(projectID, scope string, n int) error {
+	_, err := s.db.Exec(`INSERT INTO counters (project_id, scope, n) VALUES (?,?,?)
+		ON CONFLICT(project_id, scope) DO UPDATE SET n=excluded.n`, projectID, scope, n)
+	return err
+}
+
 // ---- nodes ----
 
 const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, approved_content_hash, approved_parent_hash, created_at, updated_at`

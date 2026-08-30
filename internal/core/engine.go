@@ -4,6 +4,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -586,6 +587,9 @@ func (e *Engine) downgradeAffected(mutated model.Node, why string) error {
 	}
 	for id := range affected {
 		story, err := e.st.GetNode(e.pid(), id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue // the mutation deleted the story itself
+		}
 		if err != nil {
 			return err
 		}
