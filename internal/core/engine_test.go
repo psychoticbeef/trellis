@@ -475,3 +475,99 @@ func TestFreshnessReasons_UT_3(t *testing.T) {
 		t.Fatalf("arch must be fresh after re-pinning approval, got %q", p)
 	}
 }
+
+// TestDependencyLifecycle_IT_4 proves IT-4 (US-4): two stories sharing one
+// cross-cutting target — link/unlink, approval re-pinning, cascade on target
+// edit hitting both stories, delete blocking, against a real store.
+func TestDependencyLifecycle_IT_4(t *testing.T) {
+	e := newEngine(t)
+	a := fullTree(t, e)
+	b := fullTree(t, e)
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "shared auth", nil)
+	approve(t, e, cc.ID)
+	for _, archID := range []string{a.arch, b.arch} {
+		if err := e.LinkDep(archID, cc.ID); err != nil {
+			t.Fatal(err)
+		}
+		approve(t, e, archID)
+	}
+	for _, s := range []string{a.story, b.story} {
+		if _, err := e.Transition(s, "refine"); err != nil {
+			t.Fatalf("refine %s: %v", s, err)
+		}
+	}
+
+	// One target edit downgrades both stories and stales both arch specs.
+	body := "rotated keys"
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{a.story, b.story} {
+		if got := status(t, e, s); got != "todo" {
+			t.Fatalf("story %s: status %s, want todo", s, got)
+		}
+	}
+	_, err := e.Transition(a.story, "refine")
+	wantErr(t, err, a.arch+" stale: dependency "+cc.ID)
+
+	// Delete blocked listing both dependents; unlink one, still blocked.
+	err = e.DeleteNode(cc.ID)
+	wantErr(t, err, "dependent "+a.arch, "dependent "+b.arch)
+	if err := e.UnlinkDep(a.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = e.DeleteNode(cc.ID)
+	wantErr(t, err, "dependent "+b.arch)
+
+	// Re-approval re-pins: story B repairs without touching story A.
+	approve(t, e, cc.ID)
+	approve(t, e, b.arch)
+	if _, err := e.Transition(b.story, "refine"); err != nil {
+		t.Fatalf("refine %s after re-pin: %v", b.story, err)
+	}
+}
+
+// TestDepGuards_UT_4 proves UT-4 (DD-4 "Dependency edges"): self-link
+// rejection, link-to-stale rejection, and missing/stale/unknown dep_hashes
+// entries each producing their own error line.
+func TestDepGuards_UT_4(t *testing.T) {
+	e := newMemEngine(t)
+	story := mustCreate(t, e, model.KindStory, "", "s", nil)
+	approve(t, e, story.ID)
+	arch := mustCreate(t, e, model.KindArch, story.ID, "as", nil)
+	cc1 := mustCreate(t, e, model.KindCrossCutting, "", "cc1", nil)
+	cc2 := mustCreate(t, e, model.KindCrossCutting, "", "cc2", nil)
+
+	err := e.LinkDep(arch.ID, arch.ID)
+	wantErr(t, err, "cannot depend on itself")
+
+	err = e.LinkDep(arch.ID, cc1.ID)
+	wantErr(t, err, "link blocked", cc1.ID+" never approved")
+
+	approve(t, e, cc1.ID)
+	approve(t, e, cc2.ID)
+	if err := e.LinkDep(arch.ID, cc1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.LinkDep(arch.ID, cc2.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale cc2 pin plus missing cc1 entry plus unknown extra target: three lines.
+	body := "edited"
+	if _, err := e.UpdateNode(cc2.ID, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := e.Node(arch.ID)
+	var cc2Old string
+	for _, d := range r.Deps {
+		if d.Target == cc2.ID {
+			cc2Old = "stale-" + d.TargetHash // deliberately wrong
+		}
+	}
+	err = e.Approve(arch.ID, r.Hash, map[string]string{cc2.ID: cc2Old, "CC-99": "x"})
+	wantErr(t, err,
+		"missing dep_hashes entry for "+cc1.ID,
+		"dep_hashes["+cc2.ID+"] is stale",
+		"dep_hashes contains CC-99, but "+arch.ID+" has no dependency on it")
+}
