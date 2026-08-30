@@ -117,11 +117,16 @@ a.card { display: block; background: var(--surface); border: 1px solid var(--lin
   padding: 14px 18px; margin: 0 0 10px; color: var(--ink); text-decoration: none; }
 a.card:hover { border-color: var(--accent); }
 .pid { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.85em; margin-left: 8px; }
+.pdesc { color: var(--muted); font-size: 0.9em; margin-top: 4px; }
 </style></head><body><div class="wrap"><h1><span>trellis</span> boards</h1>
 `)
 	for _, p := range projects {
-		fmt.Fprintf(&b, `<a class="card" href="/p/%s/">%s<span class="pid">%s</span></a>`+"\n",
-			template.HTMLEscapeString(p.ID), template.HTMLEscapeString(p.Name), template.HTMLEscapeString(p.ID))
+		desc := ""
+		if p.Description != "" {
+			desc = `<div class="pdesc">` + template.HTMLEscapeString(p.Description) + `</div>`
+		}
+		fmt.Fprintf(&b, `<a class="card" href="/p/%s/">%s<span class="pid">%s</span>%s</a>`+"\n",
+			template.HTMLEscapeString(p.ID), template.HTMLEscapeString(p.Name), template.HTMLEscapeString(p.ID), desc)
 	}
 	b.WriteString("</div></body></html>\n")
 	return b.String()

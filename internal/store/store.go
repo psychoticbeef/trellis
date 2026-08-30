@@ -116,6 +116,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate release_branch: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate description: %w", err)
+	}
 	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS specs_fts USING fts5(project_id UNINDEXED, node_id UNINDEXED, body)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate fts: %w", err)
@@ -143,6 +148,7 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 type Project struct {
 	ID            string
 	Name          string
+	Description   string
 	RepoPath      string
 	BaseBranch    string
 	ReleaseBranch string
@@ -155,15 +161,15 @@ func (s *Store) CreateProject(p Project) error {
 	if p.ReleaseBranch == "" {
 		p.ReleaseBranch = "main"
 	}
-	_, err := s.db.Exec(`INSERT INTO projects (id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
+	_, err := s.db.Exec(`INSERT INTO projects (id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
 	return err
 }
 
 func (s *Store) GetProject(id string) (Project, error) {
 	var p Project
-	err := s.db.QueryRow(`SELECT id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
+	err := s.db.QueryRow(`SELECT id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, fmt.Errorf("project %q: %w", id, ErrNotFound)
 	}
@@ -171,13 +177,13 @@ func (s *Store) GetProject(id string) (Project, error) {
 }
 
 func (s *Store) UpdateProject(p Project) error {
-	_, err := s.db.Exec(`UPDATE projects SET name=?, repo_path=?, base_branch=?, release_branch=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
-		p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
+	_, err := s.db.Exec(`UPDATE projects SET name=?, description=?, repo_path=?, base_branch=?, release_branch=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
+		p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
 	return err
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id, name, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +191,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

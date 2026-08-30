@@ -194,6 +194,7 @@ func cmdConfig(args []string) error {
 	repo := fs.String("repo", "", "repo path")
 	base := fs.String("base", "", "base branch")
 	release := fs.String("release", "", "release branch (default main)")
+	desc := fs.String("desc", "", "one-line project description")
 	lint := fs.String("lint", "", "lint command (run before merge)")
 	test := fs.String("test", "", "test command (must write junit xml)")
 	junit := fs.String("junit", "", "junit report glob, relative to repo")
@@ -218,6 +219,7 @@ func cmdConfig(args []string) error {
 	set(&p.RepoPath, *repo)
 	set(&p.BaseBranch, *base)
 	set(&p.ReleaseBranch, *release)
+	set(&p.Description, *desc)
 	set(&p.LintCmd, *lint)
 	set(&p.TestCmd, *test)
 	set(&p.JUnitGlob, *junit)
@@ -226,8 +228,8 @@ func cmdConfig(args []string) error {
 			return err
 		}
 	}
-	fmt.Printf("project:  %s (%s)\nrepo:     %s\nbase:     %s\nrelease:  %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
-		p.ID, p.Name, p.RepoPath, p.BaseBranch, p.ReleaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
+	fmt.Printf("project:  %s (%s)\ndesc:     %s\nrepo:     %s\nbase:     %s\nrelease:  %s\nlint_cmd: %s\ntest_cmd: %s\njunit:    %s\n",
+		p.ID, p.Name, orEmpty(p.Description), p.RepoPath, p.BaseBranch, p.ReleaseBranch, orEmpty(p.LintCmd), orEmpty(p.TestCmd), orEmpty(p.JUnitGlob))
 	return nil
 }
 
