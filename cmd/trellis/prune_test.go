@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"trellis/internal/core"
 	"trellis/internal/model"
@@ -233,5 +238,92 @@ func TestBoardCLIAcceptance_AT_18(t *testing.T) {
 		if !strings.Contains(string(html), want) {
 			t.Errorf("board missing %q", want)
 		}
+	}
+}
+
+// TestLiveBoardCLIAcceptance_AT_22 proves AT-22 (US-18 "Live board"): the
+// CLI serves the board with live reload ticks on spec changes, and the
+// static export keeps working.
+func TestLiveBoardCLIAcceptance_AT_22(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CreateNode(model.KindStory, "", "served story", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pick a free port, then serve via the CLI entrypoint in the background.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	go run([]string{"board", "p1", "--serve", "--addr", addr})
+	var res *http.Response
+	for i := 0; i < 50; i++ {
+		res, err = http.Get("http://" + addr + "/")
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("server never came up: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), "served story") || !strings.Contains(string(body), "EventSource") {
+		t.Fatalf("served page incomplete:\n%.300s", body)
+	}
+
+	// SSE tick within ~a second of a change.
+	es, err := http.Get("http://" + addr + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer es.Body.Close()
+	reader := bufio.NewReader(es.Body)
+	reader.ReadString('\n') // connected comment
+	if _, err := e.CreateNode(model.KindStory, "", "another", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	tick := make(chan string, 1)
+	go func() {
+		for {
+			l, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.HasPrefix(l, "data:") {
+				tick <- l
+				return
+			}
+		}
+	}()
+	select {
+	case <-tick:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no reload tick within 3s of a change")
+	}
+
+	// Static export unchanged.
+	out := filepath.Join(t.TempDir(), "b.html")
+	if err := run([]string{"board", "p1", "-o", out}); err != nil {
+		t.Fatalf("static board: %v", err)
+	}
+	static, _ := os.ReadFile(out)
+	if !strings.Contains(string(static), "served story") || strings.Contains(string(static), "EventSource") {
+		t.Fatal("static export wrong: must show data, must not carry reload script")
 	}
 }

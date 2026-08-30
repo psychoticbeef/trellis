@@ -535,3 +535,14 @@ func (s *Store) SearchACs(projectID, query string) ([]model.AC, error) {
 	}
 	return out, rows.Err()
 }
+
+// MaxEventSeq returns the highest event sequence for a project (0 when none).
+// The live board polls this to detect changes across processes.
+func (s *Store) MaxEventSeq(projectID string) (int64, error) {
+	var seq sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(seq) FROM events WHERE project_id=?`, projectID).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	return seq.Int64, nil
+}

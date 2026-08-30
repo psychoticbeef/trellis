@@ -37,7 +37,7 @@ Usage:
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
   trellis affected <project-id> <path>                         stories declaring a file/folder
-  trellis board <project-id> [-o <file>]                       write the HTML spec board
+  trellis board <project-id> [-o <file>] [--serve [--addr]]    write or serve the HTML spec board
   trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
 
 Data dir: $TRELLIS_DATA_DIR or ~/.local/share/trellis
@@ -329,17 +329,22 @@ func cmdLog(args []string) error {
 
 func cmdBoard(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: trellis board <project-id> [-o file]")
+		return fmt.Errorf("usage: trellis board <project-id> [-o file] [--serve [--addr host:port]]")
 	}
 	id, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("board", flag.ExitOnError)
 	out := fs.String("o", "trellis-board.html", "output file")
+	serve := fs.Bool("serve", false, "serve the board over HTTP with live reload")
+	addr := fs.String("addr", "127.0.0.1:7420", "listen address for --serve")
 	fs.Parse(rest)
 	e, st, err := engine(id)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	if *serve {
+		return board.Serve(e, st, *addr)
+	}
 	html, err := board.Render(e)
 	if err != nil {
 		return err
