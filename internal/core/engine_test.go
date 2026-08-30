@@ -748,3 +748,83 @@ func TestSequencingSemantics_UT_12(t *testing.T) {
 	err = e.LinkDep(c.story, b.story)
 	wantErr(t, err, "sequencing cycle")
 }
+
+// TestSearchUnit_UT_13 proves UT-13 (DD-13 "Search query and snippet"):
+// wildcard escaping, snippet extraction at string edges, dedup, empty result.
+func TestSearchUnit_UT_13(t *testing.T) {
+	e := newMemEngine(t)
+	s1 := mustCreate(t, e, model.KindStory, "", "payment flow", nil)
+	if _, err := e.UpdateNode(s1.ID, nil, ptr("handles 100% of retries via idempotency_key"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// LIKE wildcards match literally, not as wildcards.
+	if hits, _ := e.Search("100%"); len(hits) != 1 {
+		t.Fatalf("literal %% search: got %d hits, want 1", len(hits))
+	}
+	if hits, _ := e.Search("idempotency_key"); len(hits) != 1 {
+		t.Fatalf("literal _ search: got %d hits, want 1", len(hits))
+	}
+	if hits, _ := e.Search("x%y_z"); len(hits) != 0 {
+		t.Fatal("wildcard pattern must not match everything")
+	}
+
+	// Snippet at string edges carries no ellipsis, mid-string does.
+	hits, _ := e.Search("payment")
+	if len(hits) != 1 || hits[0].Snippet != "payment flow" {
+		t.Fatalf("edge snippet: %+v", hits)
+	}
+
+	// Dedup: title and body both matching yields one hit.
+	if _, err := e.UpdateNode(s1.ID, ptr("retries everywhere"), ptr("retries retried retryingly"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := e.Search("retrie"); len(hits) != 1 {
+		t.Fatalf("dedup: got %d hits, want 1", len(hits))
+	}
+
+	// No match and empty query: empty list, no error.
+	if hits, err := e.Search("zzzznope"); err != nil || len(hits) != 0 {
+		t.Fatalf("no-match: %v %v", hits, err)
+	}
+	if hits, err := e.Search("  "); err != nil || len(hits) != 0 {
+		t.Fatalf("empty query: %v %v", hits, err)
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// TestSearchIntegration_IT_12 proves IT-12 (US-12): matches across node and
+// AC fields, case-insensitivity, owning-story resolution for deep nodes.
+func TestSearchIntegration_IT_12(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	if _, err := e.UpdateNode(tr.ut, nil, ptr("verifies the RavenClaw token parser"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AddAC(tr.story, "a griffin keeper", "they feed the griffin", "it purrs"); err != nil {
+		t.Fatal(err)
+	}
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "structured gribbleflux logging", nil)
+
+	// Case-insensitive body match on a deep node resolves the owning story.
+	hits, err := e.Search("ravenclaw")
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("deep search: %v %v", hits, err)
+	}
+	if hits[0].ID != tr.ut || hits[0].Story != tr.story {
+		t.Fatalf("hit = %+v, want %s owned by %s", hits[0], tr.ut, tr.story)
+	}
+
+	// AC-only match surfaces the story with the AC id in the snippet.
+	hits, _ = e.Search("griffin")
+	if len(hits) != 1 || hits[0].ID != tr.story || !strings.Contains(hits[0].Snippet, ".AC-") {
+		t.Fatalf("AC search: %+v", hits)
+	}
+
+	// Cross-cutting hit carries no owning story.
+	hits, _ = e.Search("GRIBBLEFLUX")
+	if len(hits) != 1 || hits[0].ID != cc.ID || hits[0].Story != "" {
+		t.Fatalf("cc search: %+v", hits)
+	}
+}

@@ -373,3 +373,54 @@ func TestGateAcceptance_AT_5(t *testing.T) {
 	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "teleport"},
 		"unknown action", "refine, start, finish")
 }
+
+// TestSearchAcceptance_AT_14 proves AT-14 (US-12 "Spec search") through MCP:
+// body-only, AC-only and mixed-case queries, empty result behaviour, and the
+// complete product map in get_overview.
+func TestSearchAcceptance_AT_14(t *testing.T) {
+	cs := client(t)
+	story, _, _, _, dd, _ := fullTreeMCP(t, cs)
+	call(t, cs, "update_node", map[string]any{"id": dd, "body": "uses a quorum snapshotter"})
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "a wombat admin", "when": "they log in", "then": "they see the dashboard"})
+	cc := call(t, cs, "create_node", map[string]any{"kind": "cross_cutting", "title": "zebra caching", "body": "b"})["id"].(string)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+		Arguments: map[string]any{"query": "QUORUM"}})
+	if err != nil || res.IsError {
+		t.Fatalf("search failed: %v %s", err, text(res))
+	}
+	var hits []map[string]any
+	if err := json.Unmarshal([]byte(text(res)), &hits); err != nil {
+		t.Fatalf("bad search output %q: %v", text(res), err)
+	}
+	if len(hits) != 1 || hits[0]["id"] != dd || hits[0]["story"] != story {
+		t.Fatalf("mixed-case body search: %v", hits)
+	}
+	if !strings.Contains(hits[0]["snippet"].(string), "quorum snapshotter") {
+		t.Fatalf("snippet missing match: %v", hits[0])
+	}
+
+	// AC-only match.
+	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+		Arguments: map[string]any{"query": "wombat"}})
+	json.Unmarshal([]byte(text(res)), &hits)
+	if len(hits) != 1 || hits[0]["id"] != story {
+		t.Fatalf("AC search: %v", hits)
+	}
+
+	// No match: empty list, not an error.
+	res, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "search_specs",
+		Arguments: map[string]any{"query": "nothing-matches-this"}})
+	if res.IsError || strings.TrimSpace(text(res)) != "[]" {
+		t.Fatalf("no-match must be empty list: err=%v %q", res.IsError, text(res))
+	}
+
+	// Overview is the complete product map.
+	o := call(t, cs, "get_overview", map[string]any{})
+	blob, _ := json.Marshal(o)
+	for _, want := range []string{story, cc, "zebra caching"} {
+		if !strings.Contains(string(blob), want) {
+			t.Errorf("overview missing %q:\n%s", want, blob)
+		}
+	}
+}
