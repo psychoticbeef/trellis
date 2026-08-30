@@ -80,7 +80,7 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Remove a dependency link."},
 		s.unlinkDep)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
-		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch)."},
+		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
 	return srv
 }
@@ -141,7 +141,7 @@ type depIn struct {
 
 type transitionIn struct {
 	StoryID string `json:"story_id"`
-	Action  string `json:"action" jsonschema:"refine | start | finish"`
+	Action  string `json:"action" jsonschema:"refine | start | finish | abort"`
 }
 
 type okOut struct {

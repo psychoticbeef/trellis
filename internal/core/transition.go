@@ -31,8 +31,10 @@ func (e *Engine) Transition(storyID, action string) (string, error) {
 		return e.start(story)
 	case "finish":
 		return e.finish(story)
+	case "abort":
+		return e.abort(story)
 	default:
-		return "", fmt.Errorf("unknown action %q; valid actions: refine, start, finish", action)
+		return "", fmt.Errorf("unknown action %q; valid actions: refine, start, finish, abort", action)
 	}
 }
 
@@ -181,6 +183,28 @@ func (e *Engine) finish(story model.Node) (string, error) {
 	}
 	e.st.AppendEvent(e.pid(), "transition", story.ID, "in_progress -> done, merged into "+e.Project.BaseBranch)
 	return fmt.Sprintf("%s is done: %d test specs verified green, %s merged into %s, branch deleted", story.ID, len(specIDs), branch, e.Project.BaseBranch), nil
+}
+
+// abort abandons an in_progress story: the feature branch is discarded and
+// the story falls back to refined — the spec survives, the work is dropped.
+// Integrity is not re-checked: nothing about the spec changed.
+func (e *Engine) abort(story model.Node) (string, error) {
+	if err := e.requireStatus(story, model.StatusInProgress, "abort"); err != nil {
+		return "", err
+	}
+	g, err := e.git()
+	if err != nil {
+		return "", err
+	}
+	branch := branchName(story.ID)
+	if err := g.DiscardBranch(branch, e.Project.BaseBranch); err != nil {
+		return "", fmt.Errorf("abort blocked: %w", err)
+	}
+	if err := e.st.SetNodeStatus(e.pid(), story.ID, model.StatusRefined); err != nil {
+		return "", err
+	}
+	e.st.AppendEvent(e.pid(), "transition", story.ID, "in_progress -> refined (aborted, "+branch+" discarded)")
+	return fmt.Sprintf("%s aborted: branch %s discarded, back on %s, story is refined again", story.ID, branch, e.Project.BaseBranch), nil
 }
 
 func runShell(dir, cmd string) (string, error) {

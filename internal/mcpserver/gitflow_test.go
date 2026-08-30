@@ -253,3 +253,54 @@ func TestUpToDateMergeGateAcceptance_AT_11(t *testing.T) {
 		t.Fatalf("status = %s, want done", st)
 	}
 }
+
+// TestAbortAcceptance_AT_12 proves AT-12 (US-10 "Abort transition") through
+// MCP: dirty worktree blocks, clean abort discards the branch and returns to
+// refined, abort from refined is rejected, restart begins fresh from base.
+func TestAbortAcceptance_AT_12(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop"})
+	story, _, _, _, _, _ := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+
+	if err := os.WriteFile(filepath.Join(repo, "wip.txt"), []byte("w"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "work")
+
+	// Dirty worktree blocks abort.
+	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"},
+		"abort blocked", "never silently destroyed")
+	os.Remove(filepath.Join(repo, "dirty.txt"))
+
+	// Clean abort: branch gone, base checked out, story refined.
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"})
+	if st, _ := nodeStatus(t, cs, story); st != "refined" {
+		t.Fatalf("status = %s, want refined", st)
+	}
+	if got := gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "develop" {
+		t.Fatalf("on %s, want develop", got)
+	}
+	if out := gitRun(t, repo, "branch", "--list", "feature/"+story); out != "" {
+		t.Fatalf("feature branch still exists: %s", out)
+	}
+
+	// Abort from refined is rejected; restart begins fresh from base.
+	callErr(t, cs, "transition", map[string]any{"story_id": story, "action": "abort"},
+		"abort blocked", `abort requires "in_progress"`)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "start"})
+	if _, err := os.Stat(filepath.Join(repo, "wip.txt")); err == nil {
+		t.Fatal("discarded work survived into the fresh branch")
+	}
+}
