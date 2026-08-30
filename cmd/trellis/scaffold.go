@@ -119,7 +119,7 @@ func cmdGate(args []string) error {
 		return nil
 	}
 	c := exec.Command("sh", "-c", cmd)
-	c.Dir = p.RepoPath
+	c.Dir = resolveGateDir(p.RepoPath)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
@@ -133,4 +133,36 @@ func trimNewline(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// resolveGateDir picks where a gate command runs: the caller's worktree when
+// the current directory belongs to the project repository (so hook feedback
+// reflects the committing worktree), otherwise the configured repo path.
+func resolveGateDir(repoPath string) string {
+	top, err := gitOut(".", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return repoPath
+	}
+	cwdCommon, err := gitOut(".", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return repoPath
+	}
+	repoCommon, err := gitOut(repoPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return repoPath
+	}
+	if cwdCommon == repoCommon {
+		return top
+	}
+	return repoPath
+}
+
+func gitOut(dir string, args ...string) (string, error) {
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	out, err := c.Output()
+	if err != nil {
+		return "", err
+	}
+	return trimNewline(string(out)), nil
 }
