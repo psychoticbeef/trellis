@@ -74,15 +74,8 @@ MCP tools (server "trellis"). It is the single source of truth:
 `, projectID), 0o644)
 
 	if fi, err := os.Stat(filepath.Join(repo, ".git")); err == nil && fi.IsDir() {
-		write(filepath.Join(".git", "hooks", "pre-commit"), fmt.Sprintf(`#!/bin/sh
-# installed by trellis init — second defense line; finish stays the authority
-trellis gate branch --project %s || exit 1
-exec trellis gate lint --project %s
-`, projectID, projectID), 0o755)
-		write(filepath.Join(".git", "hooks", "pre-push"), fmt.Sprintf(`#!/bin/sh
-# installed by trellis init — second defense line; finish stays the authority
-exec trellis gate test --project %s
-`, projectID), 0o755)
+		write(filepath.Join(".git", "hooks", "pre-commit"), preCommitHook(projectID), 0o755)
+		write(filepath.Join(".git", "hooks", "pre-push"), prePushHook(projectID), 0o755)
 	} else {
 		msgs = append(msgs, "no .git directory, hooks skipped")
 	}
@@ -231,4 +224,21 @@ func gitOut(dir string, args ...string) (string, error) {
 		return "", err
 	}
 	return trimNewline(string(out)), nil
+}
+
+// Hook templates: the single source of the "current generation" — doctor
+// judges installed hooks against exactly these.
+func preCommitHook(projectID string) string {
+	return fmt.Sprintf(`#!/bin/sh
+# installed by trellis init — second defense line; finish stays the authority
+trellis gate branch --project %s || exit 1
+exec trellis gate lint --project %s
+`, projectID, projectID)
+}
+
+func prePushHook(projectID string) string {
+	return fmt.Sprintf(`#!/bin/sh
+# installed by trellis init — second defense line; finish stays the authority
+exec trellis gate test --project %s
+`, projectID)
 }
