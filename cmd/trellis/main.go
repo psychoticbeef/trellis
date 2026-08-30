@@ -43,6 +43,7 @@ Usage:
   trellis gate <lint|test> --project <project-id>              run a configured gate (used by git hooks)
   trellis release <project-id>                                 merge base into release with feature manifest + backup
   trellis audit <project-id>                                   validate spec and reality in both directions
+  trellis doctor <project-id> [--fix]                          detect and repair setup drift
   trellis export <project-id> [-o <file>]                      write the spec database as YAML
   trellis import -f <file> --name <name> --repo <path>         restore an export into a new project
 
@@ -87,6 +88,8 @@ func run(args []string) error {
 		return cmdRelease(rest)
 	case "audit":
 		return cmdAudit(rest)
+	case "doctor":
+		return cmdDoctor(rest)
 	case "export":
 		return cmdExport(rest)
 	case "import":
