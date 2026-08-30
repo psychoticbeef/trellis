@@ -975,3 +975,73 @@ func TestDescriptionIntegration_IT_24(t *testing.T) {
 		t.Fatalf("overview description = %q", o.Description)
 	}
 }
+
+// TestBatchValidation_UT_27 proves UT-27 (DD-27 "ApproveTree and full tree
+// reads"): each validation problem gets its own line and a failing batch
+// changes no approval state.
+func TestBatchValidation_UT_27(t *testing.T) {
+	e := newMemEngine(t)
+	tr := fullTree(t, e) // helper approves everything; make it stale again
+	body := "rewritten"
+	if _, err := e.UpdateNode(tr.story, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := fullTree(t, e)
+	if err := e.LinkDep(other.story, tr.story); err != nil { // sequencing, no hash needed
+		t.Fatal(err)
+	}
+
+	full, err := e.TreeFull(tr.story)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes := map[string]string{}
+	var walk func(n core.TreeNode)
+	walk = func(n core.TreeNode) {
+		hashes[n.ID] = n.Hash
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(full.Story)
+
+	// Validation matrix: missing node hash, unknown id, stale node hash,
+	// missing dep hash — every problem named, nothing approved.
+	bad := map[string]string{}
+	for k, v := range hashes {
+		bad[k] = v
+	}
+	delete(bad, tr.ut)
+	bad["US-99"] = "x"
+	bad[tr.dd] = "stale-hash"
+	err = e.ApproveTree(tr.story, bad, nil)
+	wantErr(t, err, "nothing was approved",
+		"missing hash for "+tr.ut,
+		"US-99, which is not part of "+tr.story,
+		"hash mismatch for "+tr.dd,
+		"missing dep_hashes entry for "+cc.ID)
+	if n, _ := e.Node(tr.story); n.Fresh {
+		t.Fatal("failed batch must not approve anything")
+	}
+
+	// Clean batch: dep hash provided, sequencing link needs none.
+	ccNode, _ := e.Node(cc.ID)
+	if err := e.ApproveTree(tr.story, hashes, map[string]string{cc.ID: ccNode.Hash}); err != nil {
+		t.Fatalf("clean batch: %v", err)
+	}
+	for _, id := range []string{tr.story, tr.at, tr.arch, tr.it, tr.dd, tr.ut} {
+		if n, _ := e.Node(id); !n.Fresh {
+			t.Fatalf("%s not fresh after batch: %v", id, n.Problems)
+		}
+	}
+	// Sequencing link on the other story approves without any dep hash.
+	r, _ := e.Node(other.story)
+	if err := e.Approve(other.story, r.Hash, nil); err != nil {
+		t.Fatalf("sequencing approve: %v", err)
+	}
+}

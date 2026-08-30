@@ -170,6 +170,7 @@ type TreeNode struct {
 	ID       string        `json:"id"`
 	Kind     string        `json:"kind"`
 	Title    string        `json:"title"`
+	Body     string        `json:"body,omitempty"`
 	Hash     string        `json:"content_hash"`
 	Fresh    bool          `json:"fresh"`
 	Problems []string      `json:"problems,omitempty"`
@@ -195,7 +196,13 @@ type TreeReport struct {
 	Integrity []string `json:"blocking_problems"`
 }
 
-func (e *Engine) Tree(storyID string) (TreeReport, error) {
+// Tree renders the story report without bodies; TreeFull includes them so a
+// single call carries the complete content (the read side of approve_tree).
+func (e *Engine) Tree(storyID string) (TreeReport, error) { return e.tree(storyID, false) }
+
+func (e *Engine) TreeFull(storyID string) (TreeReport, error) { return e.tree(storyID, true) }
+
+func (e *Engine) tree(storyID string, full bool) (TreeReport, error) {
 	story, err := e.st.GetNode(e.pid(), storyID)
 	if err != nil {
 		return TreeReport{}, err
@@ -203,7 +210,7 @@ func (e *Engine) Tree(storyID string) (TreeReport, error) {
 	if story.Kind != model.KindStory {
 		return TreeReport{}, fmt.Errorf("%s is a %s, not a story", storyID, story.Kind)
 	}
-	root, err := e.treeNode(story)
+	root, err := e.treeNode(story, full)
 	if err != nil {
 		return TreeReport{}, err
 	}
@@ -241,7 +248,7 @@ func (e *Engine) Tree(storyID string) (TreeReport, error) {
 	return report, nil
 }
 
-func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
+func (e *Engine) treeNode(n model.Node, full bool) (TreeNode, error) {
 	hash, err := e.hashOf(n)
 	if err != nil {
 		return TreeNode{}, err
@@ -251,6 +258,9 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 		return TreeNode{}, err
 	}
 	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers, Paths: n.Paths}
+	if full {
+		tn.Body = n.Body
+	}
 	if model.TestSpecKinds[n.Kind] {
 		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
 			return TreeNode{}, err
@@ -282,7 +292,7 @@ func (e *Engine) treeNode(n model.Node) (TreeNode, error) {
 		return TreeNode{}, err
 	}
 	for _, c := range children {
-		child, err := e.treeNode(c)
+		child, err := e.treeNode(c, full)
 		if err != nil {
 			return TreeNode{}, err
 		}
