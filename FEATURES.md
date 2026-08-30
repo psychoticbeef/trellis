@@ -29,6 +29,7 @@
 - **US-24** — Project description
 - **US-25** — YAML export and import
 - **US-26** — Batch tree approval
+- **US-27** — Atomic mutations
 
 ## Glossary
 

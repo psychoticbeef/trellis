@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 26
-    AT: 30
+    AS: 27
+    AT: 31
     CC: 4
-    DD: 27
-    IT: 26
-    US: 26
-    UT: 27
+    DD: 28
+    IT: 27
+    US: 27
+    UT: 28
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -68,6 +68,7 @@ counters:
     ac:US-24: 3
     ac:US-25: 4
     ac:US-26: 4
+    ac:US-27: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -1828,3 +1829,79 @@ stories:
             tests:
                 - trellis/internal/mcpserver::TestBatchApprovalAcceptance_AT_30
             recorded_at: "2026-08-30T13:25:31Z"
+    - id: US-27
+      kind: story
+      title: Atomic mutations
+      body: 'As the process owner I want concurrent sessions on one spec database to serialize instead of racing read-check-write, so guards cannot be bypassed by timing: one winner, one precise error, never a double effect.'
+      status: done
+      acceptance_criteria:
+        - id: US-27.AC-1
+          given: two sessions mutating the same project
+          when: any mutating operation runs
+          then: it holds an exclusive per-project lock shared across processes (lock file beside the database), so mutations serialize
+        - id: US-27.AC-2
+          given: two sessions firing the same transition verb
+          when: both attempt it
+          then: 'the status is re-validated under the lock: exactly one succeeds, the other gets the precise blocked error, and the side effects happen once'
+        - id: US-27.AC-3
+          given: two sessions creating an arch spec for the same story simultaneously
+          when: both insert
+          then: the database itself enforces the singleton via a unique index — the race cannot produce two arch specs
+        - id: US-27.AC-4
+          given: long mutations holding the lock
+          when: reads run concurrently
+          then: overview, tree, search and the board stay lock-free and responsive
+      approved_content_hash: 500c1a18d4218ee2f8210db48c833759e220d1e4e99da033c68a903c0b7abbf2
+      children:
+        - id: AS-27
+          kind: arch
+          title: Coarse per-project lock, fine DB invariants
+          body: 'Every public mutating engine method wraps itself in an exclusive per-project lock: flock on <db>.<project>.lock for file-backed stores, an in-process mutex for in-memory stores. Transition re-reads the story status inside the lock, so verbs cannot double-fire. The arch singleton additionally becomes a partial unique index — an invariant the database enforces even against future code paths. Reads take no lock: SQLite''s WAL gives per-statement consistency, and transiently torn multi-read reports self-correct on the next render. Approvals were already race-safe by content addressing; the lock makes them serial as well.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 9255346b4561bf2070c7bb201ac8d619dbf61440db3a469e1ecc00b3805721d4
+          approved_parent_hash: 500c1a18d4218ee2f8210db48c833759e220d1e4e99da033c68a903c0b7abbf2
+          children:
+            - id: DD-28
+              kind: detail_design
+              title: Lock plumbing
+              body: 'store: LockProject(id) returning an unlock func — flock(LOCK_EX) on a sibling lock file, or a keyed sync.Mutex for :memory:; migration adds the partial unique index idx_arch_singleton ON nodes(project_id, parent_id) WHERE kind=''arch''. core: locked(fn) helper wrapping every public mutator; Transition moves its status read inside the lock; internal helpers never re-acquire.'
+              approved_content_hash: 17b107e78febc90fba4e0dea6fb62b41cd29dbcf5742aa856900f758e1f66387
+              approved_parent_hash: 9255346b4561bf2070c7bb201ac8d619dbf61440db3a469e1ecc00b3805721d4
+              children:
+                - id: UT-28
+                  kind: unit_test
+                  title: Lock unit tests
+                  body: 'Unit-test LockProject: mutual exclusion across two store handles on one file, independence of different project ids, the in-memory fallback, and unlock releasing for the next waiter.'
+                  approved_content_hash: cea818de1846c7b9006d56d3921f15533ea70c1096d0dbb2bff80e56a19529ec
+                  approved_parent_hash: 17b107e78febc90fba4e0dea6fb62b41cd29dbcf5742aa856900f758e1f66387
+                  evidence:
+                    tests:
+                        - trellis/internal/store::TestLockProject_UT_28
+                    recorded_at: "2026-08-30T13:31:48Z"
+            - id: IT-27
+              kind: integration_test
+              title: Concurrency integration
+              body: 'Two engines over two store handles on one database file: parallel transition double-fire (one winner), parallel arch creation (index rejection), parallel node edits serializing without lost updates, reads during a held lock.'
+              approved_content_hash: 48c1f2081ecacfc370d91eb9a4c5407c7ab62a8230d40f98cd17f62732d3d74c
+              approved_parent_hash: 9255346b4561bf2070c7bb201ac8d619dbf61440db3a469e1ecc00b3805721d4
+              evidence:
+                tests:
+                    - trellis/internal/core::TestConcurrencyIntegration_IT_27
+                recorded_at: "2026-08-30T13:31:48Z"
+        - id: AT-31
+          kind: acceptance_test
+          title: Concurrency acceptance
+          body: 'Two MCP sessions over two stores opened on the same database file: race the same transition verb asserting one success and one blocked error with single side effects; race arch creation asserting the unique-index rejection; assert reads answer while a mutation holds the lock.'
+          covers:
+            - US-27.AC-1
+            - US-27.AC-2
+            - US-27.AC-3
+            - US-27.AC-4
+          approved_content_hash: 679502ad387cc9daf26d7008a17e36b276c70939e0353407afa6553f137a58f3
+          approved_parent_hash: 500c1a18d4218ee2f8210db48c833759e220d1e4e99da033c68a903c0b7abbf2
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestConcurrencyAcceptance_AT_31
+            recorded_at: "2026-08-30T13:31:48Z"
