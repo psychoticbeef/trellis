@@ -273,3 +273,44 @@ func TestApprovalFlowAcceptance_AT_3(t *testing.T) {
 	approveMCP(t, cs, ut)
 	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
 }
+
+// TestCrossCuttingFlowAcceptance_AT_4 proves AT-4 (US-4 "Cross-cutting
+// architecture dependencies"): link before/after approval, approve a
+// dependent with and without dep hashes, cascade on target edit, blocked
+// delete while referenced.
+func TestCrossCuttingFlowAcceptance_AT_4(t *testing.T) {
+	cs := client(t)
+	story, _, arch, _, _, _ := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	cc := call(t, cs, "create_node", map[string]any{"kind": "cross_cutting", "title": "logging", "body": "b"})["id"].(string)
+
+	// Linking to an unapproved target is blocked.
+	callErr(t, cs, "link_dependency", map[string]any{"node_id": arch, "target_id": cc},
+		"link blocked", cc+" never approved")
+	approveMCP(t, cs, cc)
+	call(t, cs, "link_dependency", map[string]any{"node_id": arch, "target_id": cc})
+
+	// Approving the dependent without proof of having read the target fails.
+	_, archHash := nodeStatus(t, cs, arch)
+	callErr(t, cs, "approve", map[string]any{"node_id": arch, "content_hash": archHash},
+		"missing dep_hashes entry for "+cc)
+	approveMCP(t, cs, arch)
+
+	// Editing the target stales the dependent and downgrades the story.
+	call(t, cs, "update_node", map[string]any{"id": cc, "body": "changed"})
+	st, _ := nodeStatus(t, cs, story)
+	if st != "todo" {
+		t.Fatalf("status = %s, want todo after target edit", st)
+	}
+	tree := call(t, cs, "get_tree", map[string]any{"story_id": story})
+	problems, _ := json.Marshal(tree["blocking_problems"])
+	if !strings.Contains(string(problems), arch+" stale: dependency "+cc+" changed since pin") {
+		t.Fatalf("blocking_problems missing dependency staleness:\n%s", problems)
+	}
+
+	// Deleting a referenced target is blocked; after unlink it works.
+	callErr(t, cs, "delete_node", map[string]any{"id": cc},
+		"delete blocked", "dependent "+arch)
+	call(t, cs, "unlink_dependency", map[string]any{"node_id": arch, "target_id": cc})
+	call(t, cs, "delete_node", map[string]any{"id": cc})
+}
