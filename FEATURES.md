@@ -33,6 +33,7 @@
 - **US-28** — Kanban board
 - **US-29** — Init wires and commits its own scaffold
 - **US-30** — Interoperable MCP output schemas
+- **US-31** — Release commits carry trellis authority
 
 ## Glossary
 

@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 30
-    AT: 34
+    AS: 31
+    AT: 35
     CC: 4
-    DD: 31
-    IT: 30
-    US: 30
-    UT: 31
+    DD: 32
+    IT: 31
+    US: 31
+    UT: 32
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -72,6 +72,7 @@ counters:
     ac:US-28: 3
     ac:US-29: 4
     ac:US-30: 3
+    ac:US-31: 2
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2126,3 +2127,69 @@ stories:
             tests:
                 - trellis/internal/mcpserver::TestSchemaInteropAcceptance_AT_34
             recorded_at: "2026-08-30T14:10:57Z"
+    - id: US-31
+      kind: story
+      title: Release commits carry trellis authority
+      body: 'Found releasing the first foreign project: the release manifest commit ran through the freshly scaffolded pre-commit hooks and was blocked by the lint gate in the main worktree. Release commits are trellis-authored — like init and finish they must bypass the hooks trellis itself installed; and a failed release must not strand staged manifest files on the base branch.'
+      status: done
+      acceptance_criteria:
+        - id: US-31.AC-1
+          given: a repo with trellis-scaffolded hooks
+          when: release commits FEATURES.md and the backup
+          then: the commit runs with --no-verify — trellis is the authority its hooks defend
+        - id: US-31.AC-2
+          given: a release that fails after the merge
+          when: the main worktree returns to the base branch
+          then: no staged or written manifest files leak onto the base branch — the failure path resets them before checking out
+      approved_content_hash: 55d6b25fbb2fbed482a58c4d9e5074cc0e15a6a91cf2c2d5a5874e617db29ada
+      children:
+        - id: AS-31
+          kind: arch
+          title: No-verify manifest commit with clean unwind
+          body: The release manifest commit uses --no-verify like every other trellis-authored commit. The failure path resets staged paths and removes written manifest files on the release branch before restoring the base checkout.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 0bc86c1e2fe7d3df0fe96f3d0eb4a121cd692aeffe26723cb5a55f0633a37110
+          approved_parent_hash: 55d6b25fbb2fbed482a58c4d9e5074cc0e15a6a91cf2c2d5a5874e617db29ada
+          children:
+            - id: DD-32
+              kind: detail_design
+              title: Release commit mechanics
+              body: 'core.Release: git commit --no-verify for the manifest commit; the unwind is atomic — reset --hard to the pre-merge SHA, remove written manifest files, check out base, and delete the release branch when this release created it. A failed release leaves no trace.'
+              approved_content_hash: 2eda8b07b4757c390a3a5993aaf100355728cb2f747e2e0093b2d6d3233ea135
+              approved_parent_hash: 0bc86c1e2fe7d3df0fe96f3d0eb4a121cd692aeffe26723cb5a55f0633a37110
+              children:
+                - id: UT-32
+                  kind: unit_test
+                  title: Release unwind unit tests
+                  body: 'Unit-test the unwind helper: staged files reset, written manifests removed, base branch clean afterwards.'
+                  approved_content_hash: 3c9b45c049fe815f07d254d0dc3504e0a12166effa3508bd88111b1b718ba440
+                  approved_parent_hash: 2eda8b07b4757c390a3a5993aaf100355728cb2f747e2e0093b2d6d3233ea135
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestReleaseUnwind_UT_32
+                    recorded_at: "2026-08-30T15:13:07Z"
+            - id: IT-31
+              kind: integration_test
+              title: Release authority integration
+              body: 'Engine + repo with failing pre-commit hook installed: release passes; simulated commit failure unwinds without leaking staged files to base.'
+              approved_content_hash: 0883a54c1b81f04f250a6c9c00f7e6a13858f8c07786b618ad622010028fca82
+              approved_parent_hash: 0bc86c1e2fe7d3df0fe96f3d0eb4a121cd692aeffe26723cb5a55f0633a37110
+              evidence:
+                tests:
+                    - trellis/internal/core::TestReleaseAuthority_IT_31
+                recorded_at: "2026-08-30T15:13:07Z"
+        - id: AT-35
+          kind: acceptance_test
+          title: Release authority acceptance
+          body: 'CLI release against a repo with installed hooks whose lint gate would fail (no node_modules in the main worktree): the release succeeds regardless; force a post-merge failure and assert the base branch ends clean with nothing staged.'
+          covers:
+            - US-31.AC-1
+            - US-31.AC-2
+          approved_content_hash: 29f19a6bbf83c613a5a420c225cf8d626efdd8819daa9542754f42353e40c50a
+          approved_parent_hash: 55d6b25fbb2fbed482a58c4d9e5074cc0e15a6a91cf2c2d5a5874e617db29ada
+          evidence:
+            tests:
+                - trellis/internal/core::TestReleaseAuthorityAcceptance_AT_35
+            recorded_at: "2026-08-30T15:13:07Z"
