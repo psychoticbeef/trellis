@@ -262,3 +262,72 @@ func TestPruneOnlyDone(t *testing.T) {
 	err := e.Prune(tr.story)
 	wantErr(t, err, "prune blocked", "only done stories")
 }
+
+// TestACStoryHashIntegration_IT_2 proves IT-2 (US-2): AC add/edit/delete each
+// change the story hash against a real store, child freshness and story
+// status react, and covers validation lists the known AC ids.
+func TestACStoryHashIntegration_IT_2(t *testing.T) {
+	e := newEngine(t)
+	tr := fullTree(t, e)
+	if _, err := e.Transition(tr.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+
+	hash := func() string {
+		r, err := e.Node(tr.story)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Hash
+	}
+
+	h0 := hash()
+	ac2, err := e.AddAC(tr.story, "g2", "w2", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := hash()
+	if h1 == h0 {
+		t.Fatal("AC add must change the story hash")
+	}
+	newWhen := "changed"
+	if _, err := e.UpdateAC(ac2.ID, nil, &newWhen, nil); err != nil {
+		t.Fatal(err)
+	}
+	h2 := hash()
+	if h2 == h1 {
+		t.Fatal("AC edit must change the story hash")
+	}
+	// While the story hash differs from the approved one, children are stale
+	// and the story dropped to todo.
+	if got := status(t, e, tr.story); got != "todo" {
+		t.Fatalf("status = %s, want todo", got)
+	}
+	at, err := e.Node(tr.at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at.Fresh {
+		t.Fatal("acceptance test must be stale while the story hash differs")
+	}
+
+	// Freshness is content-addressed: deleting the added AC restores the
+	// original story hash, so the child approval becomes valid again.
+	if err := e.DeleteAC(ac2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if h3 := hash(); h3 != h0 {
+		t.Fatal("deleting the added AC must restore the original story hash")
+	}
+	at, err = e.Node(tr.at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !at.Fresh {
+		t.Fatal("acceptance test must be fresh again once the story content is restored")
+	}
+
+	// Covers validation names the known AC ids.
+	_, err = e.CreateNode(model.KindAcceptanceTest, tr.story, "at2", "", []string{"nope"})
+	wantErr(t, err, "unknown acceptance criteria", tr.story+".AC-1")
+}

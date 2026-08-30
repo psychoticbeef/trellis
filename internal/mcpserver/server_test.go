@@ -78,6 +78,51 @@ func callErr(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]a
 	}
 }
 
+// approveMCP approves a node the way an agent must: read it first, pass its
+// hash and the hashes of all dependency targets.
+func approveMCP(t *testing.T, cs *mcp.ClientSession, id string) {
+	t.Helper()
+	n := call(t, cs, "get_node", map[string]any{"id": id})
+	deps := map[string]any{}
+	if ds, ok := n["depends_on"].([]any); ok {
+		for _, d := range ds {
+			dep := d.(map[string]any)
+			deps[dep["target"].(string)] = dep["target_content_hash"]
+		}
+	}
+	call(t, cs, "approve", map[string]any{"node_id": id, "content_hash": n["content_hash"], "dep_hashes": deps})
+}
+
+// fullTreeMCP builds and approves a complete story tree through the MCP
+// surface and returns the created ids in creation order.
+func fullTreeMCP(t *testing.T, cs *mcp.ClientSession) (story, at, arch, it, dd, ut string) {
+	t.Helper()
+	s := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "feature", "body": "b"})
+	story = s["id"].(string)
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g", "when": "w", "then": "t"})
+	n := call(t, cs, "create_node", map[string]any{"kind": "acceptance_test", "parent_id": story, "title": "at", "covers": []string{story + ".AC-1"}})
+	at = n["id"].(string)
+	n = call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": story, "title": "as"})
+	arch = n["id"].(string)
+	n = call(t, cs, "create_node", map[string]any{"kind": "integration_test", "parent_id": arch, "title": "it"})
+	it = n["id"].(string)
+	n = call(t, cs, "create_node", map[string]any{"kind": "detail_design", "parent_id": arch, "title": "dd"})
+	dd = n["id"].(string)
+	n = call(t, cs, "create_node", map[string]any{"kind": "unit_test", "parent_id": dd, "title": "ut"})
+	ut = n["id"].(string)
+	for _, id := range []string{story, at, arch, it, dd, ut} {
+		approveMCP(t, cs, id)
+	}
+	return
+}
+
+func nodeStatus(t *testing.T, cs *mcp.ClientSession, id string) (status, hash string) {
+	t.Helper()
+	n := call(t, cs, "get_node", map[string]any{"id": id})
+	status, _ = n["status"].(string)
+	return status, n["content_hash"].(string)
+}
+
 func text(res *mcp.CallToolResult) string {
 	if len(res.Content) == 0 {
 		return ""
@@ -137,4 +182,44 @@ func TestNodeLifecycleAcceptance_AT_1(t *testing.T) {
 	if dd2["id"] != "DD-2" {
 		t.Fatalf("id after delete = %v, want DD-2 (ids must never be reused)", dd2["id"])
 	}
+}
+
+// TestACLifecycleAcceptance_AT_2 proves AT-2 (US-2 "Structured acceptance
+// criteria"): AC add/update/delete through MCP, hash change on edit, automatic
+// story downgrade, and the blocked delete while covered.
+func TestACLifecycleAcceptance_AT_2(t *testing.T) {
+	cs := client(t)
+	story, at, _, _, _, _ := fullTreeMCP(t, cs)
+	call(t, cs, "transition", map[string]any{"story_id": story, "action": "refine"})
+	st, before := nodeStatus(t, cs, story)
+	if st != "refined" {
+		t.Fatalf("status = %s, want refined", st)
+	}
+
+	// Editing an AC changes the story hash and drops the story to todo.
+	call(t, cs, "update_acceptance_criterion", map[string]any{"ac_id": story + ".AC-1", "then": "changed outcome"})
+	st, after := nodeStatus(t, cs, story)
+	if after == before {
+		t.Fatal("story hash unchanged after AC edit")
+	}
+	if st != "todo" {
+		t.Fatalf("status = %s, want todo after AC edit", st)
+	}
+
+	// Adding and deleting an uncovered AC works; ids are per-story monotonic.
+	call(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "g2", "when": "w2", "then": "t2"})
+	n := call(t, cs, "get_node", map[string]any{"id": story})
+	acs := n["acceptance_criteria"].([]any)
+	if len(acs) != 2 {
+		t.Fatalf("got %d ACs, want 2", len(acs))
+	}
+	call(t, cs, "delete_acceptance_criterion", map[string]any{"ac_id": story + ".AC-2"})
+
+	// Deleting a covered AC is blocked, naming the covering test.
+	callErr(t, cs, "delete_acceptance_criterion", map[string]any{"ac_id": story + ".AC-1"},
+		"delete blocked", "covered by acceptance tests", at)
+
+	// Empty fields are rejected.
+	callErr(t, cs, "add_acceptance_criterion", map[string]any{"story_id": story, "given": "", "when": "w", "then": "t"},
+		"must all be non-empty")
 }
