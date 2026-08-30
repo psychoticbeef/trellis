@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"trellis/internal/model"
 )
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -218,4 +219,80 @@ func TestTransitionGuardMatrix_IT_5(t *testing.T) {
 	blocked("finish", "in_progress")
 	_, err := e.Transition(tr.story, "warp")
 	wantErr(t, err, `unknown action "warp"`)
+}
+
+// TestDoneTreeGuardIntegration_IT_7 proves IT-7 (US-7): a story driven to
+// done through the real flow rejects every mutation, accepts links onto its
+// members, shows honest stale markers after a cross-cutting edit without
+// leaving done, and prune still removes the tree.
+func TestDoneTreeGuardIntegration_IT_7(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"), reportXML("AT-1", "IT-1", "UT-1"))
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath = repo
+	p.LintCmd = "true"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	p.JUnitGlob = "reports/*.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	approve(t, e, cc.ID)
+	tr := fullTree(t, e)
+	if err := e.LinkDep(tr.arch, cc.ID); err != nil {
+		t.Fatal(err)
+	}
+	approve(t, e, tr.arch)
+	for _, verb := range []string{"refine", "start", "finish"} {
+		if _, err := e.Transition(tr.story, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+
+	// Done: every mutation path is rejected.
+	body := "x"
+	if _, err := e.UpdateNode(tr.dd, nil, &body, nil); err == nil ||
+		!strings.Contains(err.Error(), "immutable context") {
+		t.Fatalf("update on done tree: want immutability rejection, got %v", err)
+	}
+	if _, err := e.AddAC(tr.story, "g", "w", "t"); err == nil ||
+		!strings.Contains(err.Error(), "immutable context") {
+		t.Fatalf("AC add on done story: want immutability rejection, got %v", err)
+	}
+
+	// Cross-cutting edit: stale markers appear, status stays done.
+	if _, err := e.UpdateNode(cc.ID, nil, &body, nil); err != nil {
+		t.Fatalf("cross-cutting specs stay editable: %v", err)
+	}
+	if got := status(t, e, tr.story); got != "done" {
+		t.Fatalf("status = %s, done stories must not reopen", got)
+	}
+	arch, err := e.Node(tr.arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arch.Fresh {
+		t.Fatal("done arch spec must show a stale marker after dependency edit")
+	}
+
+	// Links onto done members work; prune still removes the tree after unlink.
+	other := fullTree(t, e)
+	if err := e.LinkDep(other.arch, tr.at); err != nil {
+		t.Fatalf("link onto done member: %v", err)
+	}
+	if err := e.UnlinkDep(other.arch, tr.at); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Prune(tr.story); err != nil {
+		t.Fatalf("prune of done story: %v", err)
+	}
 }
