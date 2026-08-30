@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS evidence (
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (project_id, node_id)
 );
+CREATE TABLE IF NOT EXISTS coverage (
+	project_id  TEXT NOT NULL,
+	file        TEXT NOT NULL,
+	covered     INTEGER NOT NULL,
+	total       INTEGER NOT NULL,
+	recorded_at TEXT NOT NULL,
+	PRIMARY KEY (project_id, file)
+);
 CREATE TABLE IF NOT EXISTS glossary (
 	project_id TEXT NOT NULL,
 	term       TEXT NOT NULL,
@@ -122,6 +130,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate description: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN coverage_glob TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate coverage_glob: %w", err)
+	}
 	// The arch singleton is a database invariant, not just an engine guard:
 	// even racing code paths cannot create two arch specs for one story.
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_arch_singleton ON nodes(project_id, parent_id) WHERE kind='arch'`); err != nil {
@@ -159,6 +172,7 @@ type Project struct {
 	RepoPath      string
 	BaseBranch    string
 	ReleaseBranch string
+	CoverageGlob  string
 	LintCmd       string
 	TestCmd       string
 	JUnitGlob     string
@@ -168,15 +182,15 @@ func (s *Store) CreateProject(p Project) error {
 	if p.ReleaseBranch == "" {
 		p.ReleaseBranch = "main"
 	}
-	_, err := s.db.Exec(`INSERT INTO projects (id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
+	_, err := s.db.Exec(`INSERT INTO projects (id, name, description, repo_path, base_branch, release_branch, coverage_glob, lint_cmd, test_cmd, junit_glob, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.CoverageGlob, p.LintCmd, p.TestCmd, p.JUnitGlob, now())
 	return err
 }
 
 func (s *Store) GetProject(id string) (Project, error) {
 	var p Project
-	err := s.db.QueryRow(`SELECT id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
+	err := s.db.QueryRow(`SELECT id, name, description, repo_path, base_branch, release_branch, coverage_glob, lint_cmd, test_cmd, junit_glob FROM projects WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.CoverageGlob, &p.LintCmd, &p.TestCmd, &p.JUnitGlob)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, fmt.Errorf("project %q: %w", id, ErrNotFound)
 	}
@@ -184,13 +198,13 @@ func (s *Store) GetProject(id string) (Project, error) {
 }
 
 func (s *Store) UpdateProject(p Project) error {
-	_, err := s.db.Exec(`UPDATE projects SET name=?, description=?, repo_path=?, base_branch=?, release_branch=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
-		p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
+	_, err := s.db.Exec(`UPDATE projects SET name=?, description=?, repo_path=?, base_branch=?, release_branch=?, coverage_glob=?, lint_cmd=?, test_cmd=?, junit_glob=? WHERE id=?`,
+		p.Name, p.Description, p.RepoPath, p.BaseBranch, p.ReleaseBranch, p.CoverageGlob, p.LintCmd, p.TestCmd, p.JUnitGlob, p.ID)
 	return err
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id, name, description, repo_path, base_branch, release_branch, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, description, repo_path, base_branch, release_branch, coverage_glob, lint_cmd, test_cmd, junit_glob FROM projects ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +212,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.BaseBranch, &p.ReleaseBranch, &p.CoverageGlob, &p.LintCmd, &p.TestCmd, &p.JUnitGlob); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -551,6 +565,48 @@ func (s *Store) GetEvidence(projectID, nodeID string) (Evidence, bool, error) {
 func (s *Store) DeleteEvidence(projectID, nodeID string) error {
 	_, err := s.db.Exec(`DELETE FROM evidence WHERE project_id=? AND node_id=?`, projectID, nodeID)
 	return err
+}
+
+// ---- coverage ----
+
+type CoverageRow struct {
+	File       string `json:"file"`
+	Covered    int    `json:"covered"`
+	Total      int    `json:"total"`
+	RecordedAt string `json:"recorded_at"`
+}
+
+// SetCoverage replaces the project's coverage snapshot — current state, no
+// history (CC-4).
+func (s *Store) SetCoverage(projectID string, rows []CoverageRow) error {
+	if _, err := s.db.Exec(`DELETE FROM coverage WHERE project_id=?`, projectID); err != nil {
+		return err
+	}
+	ts := now()
+	for _, r := range rows {
+		if _, err := s.db.Exec(`INSERT INTO coverage (project_id, file, covered, total, recorded_at) VALUES (?,?,?,?,?)`,
+			projectID, r.File, r.Covered, r.Total, ts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ListCoverage(projectID string) ([]CoverageRow, error) {
+	rows, err := s.db.Query(`SELECT file, covered, total, recorded_at FROM coverage WHERE project_id=? ORDER BY file`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CoverageRow
+	for rows.Next() {
+		var r CoverageRow
+		if err := rows.Scan(&r.File, &r.Covered, &r.Total, &r.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // ---- glossary ----
