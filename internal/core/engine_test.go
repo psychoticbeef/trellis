@@ -701,3 +701,50 @@ func TestDoneMutability_UT_9(t *testing.T) {
 		t.Fatalf("dd must be fresh after re-approval: %v", n.Problems)
 	}
 }
+
+// TestSequencingSemantics_UT_12 proves UT-12 (DD-12 "Sequencing link
+// semantics"): unpinned edges carry no freshness coupling, approve needs no
+// dep hash for them, start names each unfinished dependency, cycles are
+// rejected.
+func TestSequencingSemantics_UT_12(t *testing.T) {
+	e := newMemEngine(t)
+	a := fullTree(t, e)
+	b := fullTree(t, e)
+	c := fullTree(t, e)
+
+	// Linking to a todo story works (no freshness guard for sequencing).
+	if err := e.LinkDep(b.story, a.story); err != nil {
+		t.Fatalf("sequencing link to todo story: %v", err)
+	}
+
+	// No freshness coupling: editing A leaves B fresh.
+	body := "changed"
+	if _, err := e.UpdateNode(a.story, nil, &body, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.Node(b.story); !n.Fresh {
+		t.Fatalf("sequencing dependent must stay fresh, got %v", n.Problems)
+	}
+
+	// Approve without dep_hashes for sequencing links.
+	r, _ := e.Node(b.story)
+	if err := e.Approve(b.story, r.Hash, nil); err != nil {
+		t.Fatalf("approve without sequencing dep hash: %v", err)
+	}
+
+	// start names each unfinished dependency with its status.
+	if _, err := e.Transition(b.story, "refine"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Transition(b.story, "start")
+	wantErr(t, err, "start blocked: unfinished dependencies", a.story+" (todo)")
+
+	// Cycle detection: direct and transitive.
+	err = e.LinkDep(a.story, b.story)
+	wantErr(t, err, "sequencing cycle", a.story+" -> "+b.story+" -> "+a.story)
+	if err := e.LinkDep(a.story, c.story); err != nil {
+		t.Fatal(err)
+	}
+	err = e.LinkDep(c.story, b.story)
+	wantErr(t, err, "sequencing cycle")
+}

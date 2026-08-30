@@ -86,6 +86,23 @@ func (e *Engine) start(story model.Node) (string, error) {
 	if err := e.requireIntegrity(story.ID, "start"); err != nil {
 		return "", err
 	}
+	deps, err := e.st.ListDeps(e.pid(), story.ID)
+	if err != nil {
+		return "", err
+	}
+	var unfinished []string
+	for _, d := range deps {
+		target, err := e.st.GetNode(e.pid(), d.TargetID)
+		if err != nil {
+			return "", err
+		}
+		if target.Kind == model.KindStory && target.Status != model.StatusDone {
+			unfinished = append(unfinished, fmt.Sprintf("%s (%s)", target.ID, target.Status))
+		}
+	}
+	if len(unfinished) > 0 {
+		return "", fmt.Errorf("start blocked: unfinished dependencies: %s", strings.Join(unfinished, ", "))
+	}
 	g, err := e.git()
 	if err != nil {
 		return "", err
