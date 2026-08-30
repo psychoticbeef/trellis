@@ -18,9 +18,9 @@ func findingLevels(fs []finding) map[string]string {
 	return out
 }
 
-// TestDoctorChecks_UT_36 proves UT-36 (DD-36 "Doctor checks and fixers"):
+// TestDoctorChecks_UT_35 proves UT-35 (DD-36 "Doctor checks and fixers"):
 // each drift class detected with the right severity and classification.
-func TestDoctorChecks_UT_36(t *testing.T) {
+func TestDoctorChecks_UT_35(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-b", "develop")
 	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644); err != nil {
