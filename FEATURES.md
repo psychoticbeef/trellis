@@ -21,6 +21,7 @@
 - **US-20** — Gates run where the commit happens
 - **US-21** — Project glossary
 - **US-22** — Release cut with feature manifest
+- **US-23** — Boards served by the MCP server
 
 # Glossary
 
