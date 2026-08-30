@@ -5,7 +5,7 @@ project:
     base_branch: develop
     release_branch: main
     lint_cmd: gofmt -l . | tee /dev/stderr | wc -l | grep -q "^ *0$" && go vet ./...
-    test_cmd: mkdir -p reports && go run gotest.tools/gotestsum@latest --junitfile reports/tests.xml ./...
+    test_cmd: mkdir -p reports && go run gotest.tools/gotestsum@latest --junitfile reports/tests.xml -- -coverprofile=reports/cover.out ./...
     junit_glob: reports/*.xml
 glossary:
     - term: acceptance criterion
@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 31
-    AT: 35
+    AS: 32
+    AT: 36
     CC: 4
-    DD: 32
-    IT: 31
-    US: 31
-    UT: 32
+    DD: 33
+    IT: 32
+    US: 32
+    UT: 33
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -73,6 +73,7 @@ counters:
     ac:US-29: 4
     ac:US-30: 3
     ac:US-31: 2
+    ac:US-32: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2193,3 +2194,79 @@ stories:
             tests:
                 - trellis/internal/core::TestReleaseAuthorityAcceptance_AT_35
             recorded_at: "2026-08-30T15:13:07Z"
+    - id: US-32
+      kind: story
+      title: Coverage visibility
+      body: 'As a team I want test gaps visible without being gated on them: finish records code coverage when configured, the overview and the board show the overall percentage and the least-covered files, and closing a gap stays a judgment call, never a blocker.'
+      status: done
+      acceptance_criteria:
+        - id: US-32.AC-1
+          given: a project with coverage_glob configured
+          when: finish passes its gates
+          then: the coverage files are parsed (LCOV and Go coverprofile, auto-detected per file), the per-file snapshot replaces the previous one, and the finish message carries the overall percentage plus the largest gaps
+        - id: US-32.AC-2
+          given: missing, empty or unparsable coverage files
+          when: finish runs
+          then: 'coverage never blocks: finish proceeds and notes that no coverage was recorded'
+        - id: US-32.AC-3
+          given: a recorded snapshot
+          when: the agent calls get_overview
+          then: it shows the overall percentage and the lowest-covered files with their percentages — the gaps agents should weigh
+        - id: US-32.AC-4
+          given: a recorded snapshot
+          when: the board renders
+          then: a coverage section lists overall and per-file percentages with the weakest files visually flagged
+      approved_content_hash: e6ea5ab35ebfd082572f9967664b02932a7bfc1414c126b372c39f112887a577
+      children:
+        - id: AS-32
+          kind: arch
+          title: Snapshot beside the evidence, never a gate
+          body: 'Coverage is observability, not a gate: a coverage_glob project setting (CLI-configurable like the other gates), parsed after the test verdict inside finish, stored as a replace-on-write per-file snapshot next to the evidence. Overview and board read the same snapshot. Parsers: LCOV (SF/DA/LF/LH) and Go coverprofile (mode header, statement blocks), detected per file.'
+          depends_on:
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: 98a532dbc525cab4a56c5f906bd73639314274262b078859ed2f329552e3065e
+          approved_parent_hash: e6ea5ab35ebfd082572f9967664b02932a7bfc1414c126b372c39f112887a577
+          children:
+            - id: DD-33
+              kind: detail_design
+              title: Coverage parsing and plumbing
+              body: 'internal/testreport: ParseCoverage(dir, glob) detecting LCOV vs Go coverprofile per file, aggregating per-file covered/total; store: coverage table (project, file, covered, total, recorded_at) with replace-on-write; config column coverage_glob (+ --coverage flag); finish integration after evidence; Overview.Coverage with overall and up-to-10 worst files; board section on the tokens.'
+              approved_content_hash: 660e32ee9bb7c7ecd0c3e812bfa84e25107c0de4f32a2a373007deecfcdd0a3a
+              approved_parent_hash: 98a532dbc525cab4a56c5f906bd73639314274262b078859ed2f329552e3065e
+              children:
+                - id: UT-33
+                  kind: unit_test
+                  title: Coverage parser unit tests
+                  body: Unit-test both parsers incl. mixed globs, malformed input yielding an error (for the notice path), aggregation math and worst-file ordering with percentage ties.
+                  approved_content_hash: 6ad382827c7b6563287ed1a0568f065ac754ac846cc81fc7764f0152fa82fb32
+                  approved_parent_hash: 660e32ee9bb7c7ecd0c3e812bfa84e25107c0de4f32a2a373007deecfcdd0a3a
+                  evidence:
+                    tests:
+                        - trellis/internal/testreport::TestCoverageParsers_UT_33
+                    recorded_at: "2026-08-30T19:09:52Z"
+            - id: IT-32
+              kind: integration_test
+              title: Coverage integration
+              body: 'Engine + git repo: finish with LCOV and with coverprofile, snapshot replacement across runs, non-blocking behaviour on broken input, overview and board rendering.'
+              approved_content_hash: 5b85e0a75b0b1d649ad9cb4b9ae302328a31cb697fe6f4bfa28a2d8e5e3a297b
+              approved_parent_hash: 98a532dbc525cab4a56c5f906bd73639314274262b078859ed2f329552e3065e
+              evidence:
+                tests:
+                    - trellis/internal/core::TestCoverageIntegration_IT_32
+                recorded_at: "2026-08-30T19:09:52Z"
+        - id: AT-36
+          kind: acceptance_test
+          title: Coverage acceptance
+          body: 'Through MCP with the git flow: finish a story whose test command writes an LCOV file, assert the snapshot in get_overview and the summary in the finish message; rerun with a Go coverprofile; break the file and assert the non-blocking notice; render the board via the engine asserting the flagged gaps.'
+          covers:
+            - US-32.AC-1
+            - US-32.AC-2
+            - US-32.AC-3
+            - US-32.AC-4
+          approved_content_hash: 747e2972b5c0a2e51cd2efa58f9fad57347f198b90c23bd0b84771996c34ceac
+          approved_parent_hash: e6ea5ab35ebfd082572f9967664b02932a7bfc1414c126b372c39f112887a577
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestCoverageAcceptance_AT_36
+            recorded_at: "2026-08-30T19:09:52Z"
