@@ -571,3 +571,76 @@ func TestDepGuards_UT_4(t *testing.T) {
 		"dep_hashes["+cc2.ID+"] is stale",
 		"dep_hashes contains CC-99, but "+arch.ID+" has no dependency on it")
 }
+
+// TestGuardProblemLines_UT_5 proves UT-5 (DD-5 "Integrity computation"): each
+// structural defect produces exactly its problem line, and refine flips the
+// status only on an empty problem list.
+func TestGuardProblemLines_UT_5(t *testing.T) {
+	e := newMemEngine(t)
+
+	line := func(storyID, want string) {
+		t.Helper()
+		_, err := e.Transition(storyID, "refine")
+		wantErr(t, err, want)
+		if got := status(t, e, storyID); got != "todo" {
+			t.Fatalf("blocked refine must not change status, got %s", got)
+		}
+	}
+
+	// Bare story: the three top-level structure lines.
+	s1 := mustCreate(t, e, model.KindStory, "", "s1", nil)
+	approve(t, e, s1.ID)
+	line(s1.ID, "story has no acceptance criteria")
+	line(s1.ID, "story has no acceptance test specs")
+	line(s1.ID, "story has no arch spec")
+
+	// Uncovered AC names the criterion.
+	s2 := mustCreate(t, e, model.KindStory, "", "s2", nil)
+	e.AddAC(s2.ID, "g", "w", "t")
+	ac2, _ := e.AddAC(s2.ID, "g2", "w2", "t2")
+	mustCreate(t, e, model.KindAcceptanceTest, s2.ID, "at", []string{s2.ID + ".AC-1"})
+	line(s2.ID, "acceptance criterion "+ac2.ID+" is not covered by any acceptance test spec")
+
+	// Arch without integration tests / without detail designs.
+	arch2 := mustCreate(t, e, model.KindArch, s2.ID, "as", nil)
+	line(s2.ID, "arch spec "+arch2.ID+" has no integration test specs")
+	line(s2.ID, "arch spec "+arch2.ID+" has no detail designs")
+
+	// Detail design without unit tests.
+	mustCreate(t, e, model.KindIntegrationTest, arch2.ID, "it", nil)
+	dd := mustCreate(t, e, model.KindDetailDesign, arch2.ID, "dd", nil)
+	line(s2.ID, "detail design "+dd.ID+" has no unit test specs")
+
+	// Empty problem list flips the status — and only then.
+	ut := mustCreate(t, e, model.KindUnitTest, dd.ID, "ut", nil)
+	at2 := mustCreate(t, e, model.KindAcceptanceTest, s2.ID, "at2", []string{ac2.ID})
+	for _, n := range []model.Node{s2, at2, arch2, dd, ut} {
+		approve(t, e, n.ID)
+	}
+	line(s2.ID, "never approved") // the integration test node is still unapproved
+	// approve the remaining nodes found via the tree report
+	tree, err := e.Tree(s2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing []string
+	var walk func(n core.TreeNode)
+	walk = func(n core.TreeNode) {
+		if !n.Fresh {
+			missing = append(missing, n.ID)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(tree.Story)
+	for _, id := range missing {
+		approve(t, e, id)
+	}
+	if _, err := e.Transition(s2.ID, "refine"); err != nil {
+		t.Fatalf("refine with empty problem list: %v", err)
+	}
+	if got := status(t, e, s2.ID); got != "refined" {
+		t.Fatalf("status = %s, want refined", got)
+	}
+}
