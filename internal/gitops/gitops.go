@@ -5,7 +5,9 @@ package gitops
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,6 +24,14 @@ func (g Git) run(args ...string) (string, error) {
 		return text, fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, text)
 	}
 	return text, nil
+}
+
+// Run executes a git command in the repo and returns its trimmed output.
+func (g Git) Run(args ...string) (string, error) { return g.run(args...) }
+
+// WriteFile writes a file relative to the repo root.
+func (g Git) WriteFile(rel, content string) error {
+	return os.WriteFile(filepath.Join(g.Dir, rel), []byte(content), 0o644)
 }
 
 func (g Git) IsRepo() bool {
