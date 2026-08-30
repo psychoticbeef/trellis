@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 27
-    AT: 31
+    AS: 28
+    AT: 32
     CC: 4
-    DD: 28
-    IT: 27
-    US: 27
-    UT: 28
+    DD: 29
+    IT: 28
+    US: 28
+    UT: 29
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -69,6 +69,7 @@ counters:
     ac:US-25: 4
     ac:US-26: 4
     ac:US-27: 4
+    ac:US-28: 3
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -1905,3 +1906,74 @@ stories:
             tests:
                 - trellis/internal/mcpserver::TestConcurrencyAcceptance_AT_31
             recorded_at: "2026-08-30T13:31:48Z"
+    - id: US-28
+      kind: story
+      title: Kanban board
+      body: 'As a human I want the board to read like a kanban: status columns with story cards up top, and a click on a card taking me to that story''s full details.'
+      status: done
+      acceptance_criteria:
+        - id: US-28.AC-1
+          given: a rendered board
+          when: it loads
+          then: 'it leads with a kanban: one column per status in lifecycle order (todo, refined, in progress, done) with a count, and every story as a card in its column showing id, title and a stale marker when not fresh'
+        - id: US-28.AC-2
+          given: a story card
+          when: it is clicked
+          then: the browser navigates to that story's detail section — body, acceptance criteria, spec tree, evidence and gates — which is collapsed by default and opens automatically when navigated to, in the static export and the served board alike
+        - id: US-28.AC-3
+          given: anchors into nested content (a dependency link, a glossary term)
+          when: they are followed
+          then: every enclosing collapsed section opens so the target is actually visible
+      approved_content_hash: 31ff81ae9159c10f33772090d6f4782e63a6aab8f394692ae73c00baab15c72c
+      children:
+        - id: AS-28
+          kind: arch
+          title: Same document, two layers
+          body: 'The board stays one self-contained document: the kanban is a grid over the story summaries, the details are the existing per-story sections wrapped in collapsed details elements with their story id as anchor. A small inline script (no dependencies) opens every enclosing details on load and on hashchange, so card clicks, dependency links and glossary anchors always reveal their target. Served and static rendering share the template unchanged.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+          approved_content_hash: d3c1199e7c1f909f7d7149abca4c9d48ff3288ecab8f86cfe8995fd30b8235c7
+          approved_parent_hash: 31ff81ae9159c10f33772090d6f4782e63a6aab8f394692ae73c00baab15c72c
+          children:
+            - id: DD-29
+              kind: detail_design
+              title: Kanban template
+              body: 'board: page gains status columns built from the story summaries; the story section template wraps in <details id=US-n> with a summary header; openTarget() script opens parent details chain on load and hashchange; column and card styles on the existing tokens.'
+              approved_content_hash: 18716367fbcf59b078b52e141afe6d4493919491ae134e18afc82d7ec64bff82
+              approved_parent_hash: d3c1199e7c1f909f7d7149abca4c9d48ff3288ecab8f86cfe8995fd30b8235c7
+              children:
+                - id: UT-29
+                  kind: unit_test
+                  title: Kanban rendering unit tests
+                  body: Unit-test card escaping, empty-board rendering, exactly one open-on-navigate script per page, and that every story id appears exactly once as an element id despite the card links.
+                  approved_content_hash: 9ad39f26f9853c7acb60ec25004aee3d20e48611703419a7035e1e5a71a6c657
+                  approved_parent_hash: 18716367fbcf59b078b52e141afe6d4493919491ae134e18afc82d7ec64bff82
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestKanbanRendering_UT_29
+                    recorded_at: "2026-08-30T13:39:00Z"
+            - id: IT-28
+              kind: integration_test
+              title: Kanban integration
+              body: 'Engine + board over stories in every status: column ordering and counts, empty columns rendering, card freshness markers, detail sections carrying the full existing content (ACs, tree, evidence, gates) inside collapsed details.'
+              approved_content_hash: fb3503a5ab8cdce5883c9fe9772de23ec8c6ab7800b29bd59b8211add5f36cf5
+              approved_parent_hash: d3c1199e7c1f909f7d7149abca4c9d48ff3288ecab8f86cfe8995fd30b8235c7
+              evidence:
+                tests:
+                    - trellis/internal/board::TestKanbanIntegration_IT_28
+                recorded_at: "2026-08-30T13:39:00Z"
+        - id: AT-32
+          kind: acceptance_test
+          title: Kanban acceptance
+          body: 'Render a populated board (stories across several statuses, one stale): assert the four columns in order with correct counts and card placement, stale marker on the stale card, cards linking to detail sections that are collapsed details elements, and the inline open-on-navigate script that walks parent details — present in both the static export and the served page.'
+          covers:
+            - US-28.AC-1
+            - US-28.AC-2
+            - US-28.AC-3
+          approved_content_hash: e57545153b05b4efc17b64d320d29248116167a9a24428c809c395c2d5bd7cc6
+          approved_parent_hash: 31ff81ae9159c10f33772090d6f4782e63a6aab8f394692ae73c00baab15c72c
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestKanbanAcceptance_AT_32
+            recorded_at: "2026-08-30T13:39:00Z"

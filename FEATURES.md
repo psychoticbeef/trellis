@@ -30,6 +30,7 @@
 - **US-25** — YAML export and import
 - **US-26** — Batch tree approval
 - **US-27** — Atomic mutations
+- **US-28** — Kanban board
 
 ## Glossary
 
