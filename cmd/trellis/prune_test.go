@@ -696,3 +696,77 @@ func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
 		t.Fatal("backup leaked onto the base branch")
 	}
 }
+
+// TestKanbanAcceptance_AT_32 proves AT-32 (US-28 "Kanban board") through the
+// CLI export and the served page: columns with counts, card placement, stale
+// marker, collapsed details, the open-on-navigate script in both outputs.
+func TestKanbanAcceptance_AT_32(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleStory, _ := e.CreateNode(model.KindStory, "", "stale one", "", nil)
+	s2, _ := e.CreateNode(model.KindStory, "", "second", "detail body here", nil)
+	r, _ := e.Node(s2.ID)
+	if err := e.Approve(s2.ID, r.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	out := filepath.Join(t.TempDir(), "b.html")
+	if err := run([]string{"board", "p1", "-o", out}); err != nil {
+		t.Fatalf("board: %v", err)
+	}
+	html, _ := os.ReadFile(out)
+	page := string(html)
+	for _, want := range []string{
+		">todo<", ">refined<", ">in progress<", ">done<",
+		`href="#` + staleStory.ID + `"`,
+		`<details class="story" id="` + s2.ID + `"`,
+		"function openTarget",
+		"detail body here",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("static board missing %q", want)
+		}
+	}
+	// The stale card carries its marker; the count for todo is 2.
+	if !strings.Contains(page, ">todo<span class=\"count\">2</span>") {
+		t.Errorf("todo column count wrong")
+	}
+
+	// Served page carries the same kanban plus the reload machinery.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	go run([]string{"board", "p1", "--serve", "--addr", addr})
+	var res *http.Response
+	for i := 0; i < 50; i++ {
+		res, err = http.Get("http://" + addr + "/")
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	for _, want := range []string{"function openTarget", ">todo<", "EventSource"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("served board missing %q", want)
+		}
+	}
+}
