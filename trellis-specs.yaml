@@ -35,13 +35,13 @@ glossary:
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 counters:
-    AS: 33
-    AT: 37
+    AS: 36
+    AT: 40
     CC: 4
-    DD: 34
-    IT: 33
-    US: 33
-    UT: 34
+    DD: 37
+    IT: 36
+    US: 36
+    UT: 37
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -75,6 +75,9 @@ counters:
     ac:US-31: 2
     ac:US-32: 4
     ac:US-33: 4
+    ac:US-34: 3
+    ac:US-35: 3
+    ac:US-36: 2
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2347,3 +2350,211 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestAuditAcceptance_AT_37
             recorded_at: "2026-08-30T19:44:51Z"
+    - id: US-34
+      kind: story
+      title: Setup doctor
+      body: 'As a human I want one command that detects and repairs setup drift: the wiring rots quietly (hooks from an older generation, a binary off PATH, a missing ignore line) and every drift class has already bitten us once.'
+      status: done
+      acceptance_criteria:
+        - id: US-34.AC-1
+          given: a wired repository
+          when: trellis doctor runs
+          then: it checks the full wiring matrix — trellis on PATH, git repo with base and release branches, worktree ignore line, hooks present AND current generation, .mcp.json referencing the project, AGENTS.md pointer, gate config — and reports each item as ok, warn or fail
+        - id: US-34.AC-2
+          given: drift in artifacts trellis owns
+          when: trellis doctor --fix runs
+          then: hooks are rewritten to the current generation, the ignore line is ensured, missing .mcp.json or AGENTS.md are scaffolded create-if-absent; user-owned problems (missing branches, unconfigured gates) are reported with the exact command and never auto-executed
+        - id: US-34.AC-3
+          given: a doctor run without --fix
+          when: it completes
+          then: nothing was mutated, and the exit code is 0 without failures and 1 with them
+      approved_content_hash: a33811fc8ed5d5a37291d842328ee9403bdc5a8c9ef05e7ae85749a6f90a0bdd
+      children:
+        - id: AS-34
+          kind: arch
+          title: Checks shared with the scaffolder
+          body: doctor reuses the scaffold building blocks (hook templates, ignore ensure, wiring templates) so 'current generation' is by construction whatever scaffold writes today; checks are pure functions over repo+ config returning ok/warn/fail findings, --fix maps each trellis-owned failure to its scaffold writer.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+          approved_parent_hash: a33811fc8ed5d5a37291d842328ee9403bdc5a8c9ef05e7ae85749a6f90a0bdd
+          children:
+            - id: DD-35
+              kind: detail_design
+              title: Doctor checks and fixers
+              body: 'cmd/trellis: doctorChecks(project, repo) []finding{name, level, hint, fixable}; hook currency = contains the branch-gate line the template carries; cmdDoctor prints the table, --fix reruns scaffold writers for fixable findings.'
+              approved_content_hash: d8a33f46cc4a832f4a166c7190cf922e7c05354806c1303f22c395e0618dc83a
+              approved_parent_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+              children:
+                - id: UT-35
+                  kind: unit_test
+                  title: Doctor checks and fixers unit tests
+                  body: 'Unit-test each check against fabricated repo states: missing PATH binary (PATH stripped), old hook content, missing ignore line, healthy state, and the fixable/user-owned classification.'
+                  approved_content_hash: 3d96bb955dffff57e0aba1fae732079e14a6285f122a6894f311f764dacada4c
+                  approved_parent_hash: d8a33f46cc4a832f4a166c7190cf922e7c05354806c1303f22c395e0618dc83a
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestDoctorChecks_UT_35
+                    recorded_at: "2026-08-30T19:59:47Z"
+            - id: IT-34
+              kind: integration_test
+              title: Setup doctor integration
+              body: CLI + repos in every drift state incl. an old-generation pre-commit hook (no branch gate) being detected and rewritten; a fully healthy repo yields all-ok and exit 0.
+              approved_content_hash: 6a08341ecc9a4576cdaf96a9983a9a1f270c7d30b8d0b47061c045d480c6f917
+              approved_parent_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestDoctorIntegration_IT_34
+                recorded_at: "2026-08-30T19:59:47Z"
+        - id: AT-38
+          kind: acceptance_test
+          title: Setup doctor acceptance
+          body: 'CLI on a matrix of broken repos: each drift class detected with the right severity, --fix repairing exactly the trellis-owned artifacts (hook content asserted current afterwards), user-owned findings carrying their command, read-only default verified via file hashes, exit codes both ways.'
+          covers:
+            - US-34.AC-1
+            - US-34.AC-2
+            - US-34.AC-3
+          approved_content_hash: 17c05cfad453fe5133b196c60b5ea35442e17c96ebf2f371d7a3b355f3850bd7
+          approved_parent_hash: a33811fc8ed5d5a37291d842328ee9403bdc5a8c9ef05e7ae85749a6f90a0bdd
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestDoctorAcceptance_AT_38
+            recorded_at: "2026-08-30T19:59:47Z"
+    - id: US-35
+      kind: story
+      title: Next story
+      body: As a development agent I want to be told which story to pick up next, so the flow from refined backlog to started work needs no manual scanning.
+      status: done
+      acceptance_criteria:
+        - id: US-35.AC-1
+          given: refined stories whose sequencing dependencies are all done
+          when: next is asked
+          then: they are listed as start candidates ordered by story id, with title
+        - id: US-35.AC-2
+          given: refined stories blocked by unfinished sequencing dependencies
+          when: next is asked
+          then: they are listed separately, each naming its unfinished dependencies with their status
+        - id: US-35.AC-3
+          given: no refined story at all
+          when: next is asked
+          then: the answer says so explicitly; CLI (trellis next) and MCP tool return the same data
+      approved_content_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+      children:
+        - id: AS-35
+          kind: arch
+          title: One query over statuses and sequencing edges
+          body: NextStories walks refined stories and their sequencing edges (the same check start enforces), splitting candidates from blocked; served identically by the next CLI command and a next_story MCP tool with an object envelope.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+          approved_content_hash: b0ddd95f99090ce9ac76c2a951f8434b02a199ebfd0ac9d32e5deaae49972fa1
+          approved_parent_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+          children:
+            - id: DD-36
+              kind: detail_design
+              title: NextStories query
+              body: 'core: NextStories() (candidates []StorySummary, blocked []BlockedStory) reusing the start guard''s dependency walk; CLI command next; MCP tool next_story.'
+              approved_content_hash: 8502f1226de71e5954088bfd8de69c54b9cb4a4bdfa462a034abef3d5200d7a9
+              approved_parent_hash: b0ddd95f99090ce9ac76c2a951f8434b02a199ebfd0ac9d32e5deaae49972fa1
+              children:
+                - id: UT-36
+                  kind: unit_test
+                  title: NextStories query unit tests
+                  body: 'Unit-test the split logic over fabricated statuses: ordering, multiple unfinished deps listed, done/in_progress stories never candidates.'
+                  approved_content_hash: aab98edce2accaa1a041fcad4596c66563c8b8a7f5b6780f8ce239bc1ddb50aa
+                  approved_parent_hash: 8502f1226de71e5954088bfd8de69c54b9cb4a4bdfa462a034abef3d5200d7a9
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestNextSplit_UT_36
+                    recorded_at: "2026-08-30T20:02:06Z"
+            - id: IT-35
+              kind: integration_test
+              title: Next story integration
+              body: 'Engine + store: candidate/blocked/empty matrix incl. a dependency chain where finishing the prerequisite moves the dependent into candidates.'
+              approved_content_hash: 7f615a0303358be9de366763074f731354802f6447ebdae0923252c61096269b
+              approved_parent_hash: b0ddd95f99090ce9ac76c2a951f8434b02a199ebfd0ac9d32e5deaae49972fa1
+              evidence:
+                tests:
+                    - trellis/internal/core::TestNextIntegration_IT_35
+                recorded_at: "2026-08-30T20:02:06Z"
+        - id: AT-39
+          kind: acceptance_test
+          title: Next story acceptance
+          body: 'CLI and MCP over a backlog with startable, dependency-blocked and unrefined stories: candidate ordering, blocked list with dependency status, and the explicit empty answer.'
+          covers:
+            - US-35.AC-1
+            - US-35.AC-2
+            - US-35.AC-3
+          approved_content_hash: f6c21e77450665fe4c7172a03f7a74b4f78e0c2efc48136ca67f8d7079538434
+          approved_parent_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestNextAcceptance_AT_39
+            recorded_at: "2026-08-30T20:02:06Z"
+    - id: US-36
+      kind: story
+      title: Coverage delta
+      body: 'As a team we want each coverage snapshot to say how it moved: one scalar of memory, no history — enough to notice erosion.'
+      status: done
+      acceptance_criteria:
+        - id: US-36.AC-1
+          given: a previous coverage snapshot
+          when: finish records a new one
+          then: the finish message and the overview carry the signed delta of the overall percentage against the previous snapshot
+        - id: US-36.AC-2
+          given: no previous snapshot
+          when: finish records the first one
+          then: no delta is shown — never a misleading zero
+      approved_content_hash: 8b34dba3ee1fed4653cafdd5c717404d196595a4bf668303d5b57d0c6e4ed38a
+      children:
+        - id: AS-36
+          kind: arch
+          title: Delta from the outgoing snapshot
+          body: Before a snapshot replaces its predecessor, the old overall percentage is computed from the existing rows and the difference travels with the summary — no extra storage, no history.
+          depends_on:
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: bbed8ca2e3b72fe073dfffed05cfb9fd6b5cbf00ed57dcba387eb91c84fa60a0
+          approved_parent_hash: 8b34dba3ee1fed4653cafdd5c717404d196595a4bf668303d5b57d0c6e4ed38a
+          children:
+            - id: DD-37
+              kind: detail_design
+              title: Delta plumbing
+              body: 'recordCoverage computes the previous total from ListCoverage before SetCoverage and appends (+/-x.x) to the note; Overview.Coverage gains delta_pct as pointer, nil on first snapshot. The overview derives its delta from a prev_total column? No — recompute is impossible after replace, so the delta is stored as one scalar on the snapshot rows'' shared metadata: a single coverage_meta row per project holding prev_total_pct.'
+              approved_content_hash: afc938eee802b08d2b722078678374bed5452578cb4fb40ffb289053922228d9
+              approved_parent_hash: bbed8ca2e3b72fe073dfffed05cfb9fd6b5cbf00ed57dcba387eb91c84fa60a0
+              children:
+                - id: UT-37
+                  kind: unit_test
+                  title: Delta plumbing unit tests
+                  body: Unit-test delta math incl. sign, the nil-on-first behaviour, and meta persistence across snapshot replacement.
+                  approved_content_hash: 1e3ae4371203cfdf4c10c96d364cff820fae03812377fd5a3e7fc51cdf5f34d7
+                  approved_parent_hash: afc938eee802b08d2b722078678374bed5452578cb4fb40ffb289053922228d9
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestCoverageDeltaUnit_UT_37
+                    recorded_at: "2026-08-30T20:03:52Z"
+            - id: IT-36
+              kind: integration_test
+              title: Coverage delta integration
+              body: 'Engine + repo: first finish no delta, second finish signed delta both directions, overview field.'
+              approved_content_hash: 0ee85baf5c8973a7b7897c7934dd6966b8e5e3d53f6720ce245579220730cef7
+              approved_parent_hash: bbed8ca2e3b72fe073dfffed05cfb9fd6b5cbf00ed57dcba387eb91c84fa60a0
+              evidence:
+                tests:
+                    - trellis/internal/core::TestCoverageDelta_IT_36
+                recorded_at: "2026-08-30T20:03:52Z"
+        - id: AT-40
+          kind: acceptance_test
+          title: Coverage delta acceptance
+          body: 'Two finishes with different coverage inputs through MCP: first message without delta, second with the correct signed delta; the overview mirrors it.'
+          covers:
+            - US-36.AC-1
+            - US-36.AC-2
+          approved_content_hash: df9494217722b247a7234831325301ed0e471c17e2a27d4cacb9dac9ccd8f30c
+          approved_parent_hash: 8b34dba3ee1fed4653cafdd5c717404d196595a4bf668303d5b57d0c6e4ed38a
+          evidence:
+            tests:
+                - trellis/internal/core::TestCoverageDeltaAcceptance_AT_40
+            recorded_at: "2026-08-30T20:03:52Z"

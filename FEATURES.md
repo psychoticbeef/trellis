@@ -36,6 +36,9 @@
 - **US-31** — Release commits carry trellis authority
 - **US-32** — Coverage visibility
 - **US-33** — Bidirectional audit
+- **US-34** — Setup doctor
+- **US-35** — Next story
+- **US-36** — Coverage delta
 
 ## Glossary
 
