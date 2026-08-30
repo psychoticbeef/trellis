@@ -79,6 +79,9 @@ func New(engine *core.Engine, version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "unlink_dependency",
 		Description: "Remove a dependency link."},
 		s.unlinkDep)
+	mcp.AddTool(srv, &mcp.Tool{Name: "search_specs",
+		Description: "Full-text search over spec titles, bodies and acceptance criteria (case-insensitive). Returns id, kind, owning story, title and a matching snippet per hit. Use this to find relevant context before designing or implementing."},
+		s.searchSpecs)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
 		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},
 		s.transition)
@@ -142,6 +145,10 @@ type depIn struct {
 type transitionIn struct {
 	StoryID string `json:"story_id"`
 	Action  string `json:"action" jsonschema:"refine | start | finish | abort"`
+}
+
+type searchIn struct {
+	Query string `json:"query"`
 }
 
 type okOut struct {
@@ -237,6 +244,11 @@ func (s *Server) unlinkDep(_ context.Context, _ *mcp.CallToolRequest, in depIn) 
 		return nil, okOut{}, err
 	}
 	return nil, okOut{Message: fmt.Sprintf("dependency %s -> %s removed", in.NodeID, in.TargetID)}, nil
+}
+
+func (s *Server) searchSpecs(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, []core.SearchHit, error) {
+	hits, err := s.engine.Search(in.Query)
+	return nil, hits, err
 }
 
 func (s *Server) transition(_ context.Context, _ *mcp.CallToolRequest, in transitionIn) (*mcp.CallToolResult, okOut, error) {

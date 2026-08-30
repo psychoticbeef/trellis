@@ -424,3 +424,43 @@ func (s *Store) ListEvents(projectID string, limit int) ([]Event, error) {
 	}
 	return out, rows.Err()
 }
+
+// ---- search ----
+
+// escapeLike escapes LIKE wildcards so user queries match literally.
+func escapeLike(q string) string {
+	q = strings.ReplaceAll(q, `\`, `\\`)
+	q = strings.ReplaceAll(q, `%`, `\%`)
+	q = strings.ReplaceAll(q, `_`, `\_`)
+	return q
+}
+
+// SearchNodes returns nodes whose title or body contains the query
+// (case-insensitive).
+func (s *Store) SearchNodes(projectID, query string) ([]model.Node, error) {
+	pat := "%" + escapeLike(query) + "%"
+	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND (title LIKE ? ESCAPE '\' COLLATE NOCASE OR body LIKE ? ESCAPE '\' COLLATE NOCASE) ORDER BY id`,
+		projectID, pat, pat)
+}
+
+// SearchACs returns acceptance criteria whose given/when/then contains the
+// query (case-insensitive).
+func (s *Store) SearchACs(projectID, query string) ([]model.AC, error) {
+	pat := "%" + escapeLike(query) + "%"
+	rows, err := s.db.Query(`SELECT id, story_id, given_, when_, then_, position FROM acceptance_criteria
+		WHERE project_id=? AND (given_ LIKE ? ESCAPE '\' COLLATE NOCASE OR when_ LIKE ? ESCAPE '\' COLLATE NOCASE OR then_ LIKE ? ESCAPE '\' COLLATE NOCASE) ORDER BY id`,
+		projectID, pat, pat, pat)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.AC
+	for rows.Next() {
+		var ac model.AC
+		if err := rows.Scan(&ac.ID, &ac.StoryID, &ac.Given, &ac.When, &ac.Then, &ac.Position); err != nil {
+			return nil, err
+		}
+		out = append(out, ac)
+	}
+	return out, rows.Err()
+}
