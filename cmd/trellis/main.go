@@ -1,7 +1,7 @@
 // trellis: deterministic spec tracking and story gating for LLM-driven development.
 //
 // The agent talks to trellis only via MCP (trellis serve); the CLI is the
-// human's window: init, config, inspection, prune.
+// human's window plus the trusted extension's token-usage reporting boundary.
 package main
 
 import (

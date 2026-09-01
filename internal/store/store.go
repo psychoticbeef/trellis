@@ -381,6 +381,9 @@ func (s *Store) DeleteNode(projectID, id string) error {
 	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
 		return err
 	}
+	if _, err := s.db.Exec(`DELETE FROM story_usage WHERE project_id=? AND story_id=?`, projectID, id); err != nil {
+		return err
+	}
 	return s.DeleteEvidence(projectID, id)
 }
 

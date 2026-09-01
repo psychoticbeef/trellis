@@ -9,7 +9,6 @@ import (
 
 // StoryUsage holds accumulated token counts for one story.
 type StoryUsage struct {
-	StoryID         string
 	TokensMain      int64
 	TokensSubagents int64
 }
@@ -37,7 +36,6 @@ func (s *Store) AddStoryUsage(projectID, storyID string, main, subagents int64) 
 
 // GetStoryUsage returns ok=false when no usage was reported for the story.
 func (s *Store) GetStoryUsage(projectID, storyID string) (usage StoryUsage, ok bool, err error) {
-	usage.StoryID = storyID
 	err = s.db.QueryRow(`SELECT tokens_main, tokens_subagents FROM story_usage WHERE project_id=? AND story_id=?`,
 		projectID, storyID).Scan(&usage.TokensMain, &usage.TokensSubagents)
 	if errors.Is(err, sql.ErrNoRows) {

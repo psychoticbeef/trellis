@@ -37,6 +37,12 @@ func TestUsageValidation_UT_38(t *testing.T) {
 	if err != nil || !ok || got.TokensMain != 10 || got.TokensSubagents != 4 {
 		t.Fatalf("usage changed after rejection: %+v ok=%v err=%v", got, ok, err)
 	}
+	if err := e.DeleteNode(story.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.GetStoryUsage("p1", story.ID); err != nil || ok {
+		t.Fatalf("deleted story retained usage: ok=%v err=%v", ok, err)
+	}
 }
 
 // TestUsageOverview_UT_39 proves UT-39: exact optional counters and compact

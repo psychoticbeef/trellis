@@ -60,6 +60,12 @@ func TestTokenUsageCLIAcceptance_AT_41(t *testing.T) {
 	if bothErr == nil || !strings.Contains(bothErr.Error(), used.ID) || !strings.Contains(bothErr.Error(), "--main") || !strings.Contains(bothErr.Error(), "--subagents") {
 		t.Fatalf("aggregate validation error = %v", bothErr)
 	}
+	exhaustiveErr := run([]string{"usage", "add", "p1", used.ID, "--bogus", "x"})
+	for _, want := range []string{used.ID, "unknown flag --bogus", "--main is required", "--subagents is required"} {
+		if exhaustiveErr == nil || !strings.Contains(exhaustiveErr.Error(), want) {
+			t.Fatalf("exhaustive flag error missing %q: %v", want, exhaustiveErr)
+		}
+	}
 
 	st, err = openStore()
 	if err != nil {
