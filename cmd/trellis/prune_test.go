@@ -700,7 +700,7 @@ func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
 
 // TestKanbanAcceptance_AT_32 proves AT-32 (US-28 "Kanban board") through the
 // CLI export and the served page: columns with counts, card placement, stale
-// marker, collapsed details, the open-on-navigate script in both outputs.
+// marker, story detail overlay, and embedded open script in both outputs.
 func TestKanbanAcceptance_AT_32(t *testing.T) {
 	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
 	st, err := openStore()
@@ -715,6 +715,14 @@ func TestKanbanAcceptance_AT_32(t *testing.T) {
 		t.Fatal(err)
 	}
 	staleStory, _ := e.CreateNode(model.KindStory, "", "stale one", "", nil)
+	staleReport, _ := e.Node(staleStory.ID)
+	if err := e.Approve(staleStory.ID, staleReport.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	staleBody := "changed after approval"
+	if _, err := e.UpdateNode(staleStory.ID, nil, &staleBody, nil); err != nil {
+		t.Fatal(err)
+	}
 	s2, _ := e.CreateNode(model.KindStory, "", "second", "detail body here", nil)
 	r, _ := e.Node(s2.ID)
 	if err := e.Approve(s2.ID, r.Hash, nil); err != nil {
@@ -730,16 +738,27 @@ func TestKanbanAcceptance_AT_32(t *testing.T) {
 	page := string(html)
 	for _, want := range []string{
 		">todo<", ">refined<", ">in progress<", ">done<",
-		`href="#` + staleStory.ID + `"`,
-		`<details class="story" id="` + s2.ID + `"`,
-		"function openTarget",
+		`data-story-open="` + staleStory.ID + `"`,
+		`id="story-` + s2.ID + `"`,
+		"function openStoryDetail",
 		"detail body here",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("static board missing %q", want)
 		}
 	}
-	// The stale card carries its marker; the count for todo is 2.
+	// Invalidated approval is stale; never-approved content is blocked.
+	for id, marker := range map[string]string{staleStory.ID: "stale", s2.ID: "blocked"} {
+		start := strings.Index(page, `data-story-open="`+id+`"`)
+		if start < 0 {
+			t.Errorf("card %s missing", id)
+			continue
+		}
+		end := strings.Index(page[start:], "</button>")
+		if end < 0 || !strings.Contains(page[start:start+end], ">"+marker+"<") {
+			t.Errorf("card %s missing %s integrity marker", id, marker)
+		}
+	}
 	if !strings.Contains(page, ">todo<span class=\"count\">2</span>") {
 		t.Errorf("todo column count wrong")
 	}
@@ -765,7 +784,7 @@ func TestKanbanAcceptance_AT_32(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	for _, want := range []string{"function openTarget", ">todo<", "EventSource"} {
+	for _, want := range []string{"function openStoryDetail", ">todo<", "EventSource"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("served board missing %q", want)
 		}

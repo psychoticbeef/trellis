@@ -55,9 +55,21 @@ func TestBoardUnit_UT_16(t *testing.T) {
 		t.Fatal("escaped title missing")
 	}
 
-	// Stale marker: unapproved story shows as stale.
+	// Never-approved content is blocked, not stale.
+	if !strings.Contains(html, ">blocked<") {
+		t.Fatal("blocked marker missing for never-approved node")
+	}
+	root, _ := e.Node(s.ID)
+	if err := e.Approve(s.ID, root.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	changed := "changed after approval"
+	if _, err := e.UpdateNode(s.ID, nil, &changed, nil); err != nil {
+		t.Fatal(err)
+	}
+	html, _ = board.Render(e)
 	if !strings.Contains(html, ">stale<") {
-		t.Fatal("stale marker missing for unapproved node")
+		t.Fatal("stale marker missing for invalidated approval")
 	}
 
 	// Evidence rendering on a test spec.
@@ -125,8 +137,12 @@ func TestBoardIntegration_IT_15(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every node id appears exactly once as an element id.
-	for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID, cc.ID} {
+	// Every spec id appears exactly once as an element id; story detail uses
+	// a story-prefixed id so card controls and modal remain unique.
+	if got := strings.Count(html, `id="story-`+s.ID+`"`); got != 1 {
+		t.Errorf("story %s: %d detail id occurrences, want 1", s.ID, got)
+	}
+	for _, id := range []string{at.ID, arch.ID, it.ID, dd.ID, ut.ID, cc.ID} {
 		if got := strings.Count(html, `id="`+id+`"`); got != 1 {
 			t.Errorf("node %s: %d id occurrences, want 1", id, got)
 		}
@@ -203,16 +219,16 @@ func TestGlossaryIntegration_IT_21(t *testing.T) {
 }
 
 // TestKanbanRendering_UT_29 proves UT-29 (DD-29 "Kanban template"): card
-// escaping, empty-board rendering, exactly one open-on-navigate script, and
-// unique element ids despite card links.
+// escaping, empty-board rendering, one embedded story detail script, and unique
+// element ids despite card controls.
 func TestKanbanRendering_UT_29(t *testing.T) {
 	e, _ := newEngine(t)
 	html, err := board.Render(e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(html, "function openTarget"); got != 1 {
-		t.Fatalf("open-on-navigate script count = %d, want 1", got)
+	if got := strings.Count(html, "function openStoryDetail"); got != 1 {
+		t.Fatalf("story detail script count = %d, want 1", got)
 	}
 	for _, col := range []string{">todo<", ">refined<", ">in progress<", ">done<"} {
 		if !strings.Contains(html, col) {
@@ -228,11 +244,11 @@ func TestKanbanRendering_UT_29(t *testing.T) {
 	if strings.Contains(html, "card <b>title</b>") || !strings.Contains(html, "card &lt;b&gt;title&lt;/b&gt;") {
 		t.Fatal("card title not escaped")
 	}
-	if got := strings.Count(html, `id="`+s.ID+`"`); got != 1 {
-		t.Fatalf("story id occurs %d times as element id, want 1", got)
+	if got := strings.Count(html, `id="story-`+s.ID+`"`); got != 1 {
+		t.Fatalf("story detail id occurs %d times as element id, want 1", got)
 	}
-	if got := strings.Count(html, `href="#`+s.ID+`"`); got != 1 {
-		t.Fatalf("card link occurs %d times, want 1", got)
+	if got := strings.Count(html, `data-story-open="`+s.ID+`"`); got != 1 {
+		t.Fatalf("card control occurs %d times, want 1", got)
 	}
 }
 
@@ -251,8 +267,13 @@ func TestKanbanIntegration_IT_28(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// One todo (stale: unapproved), one refined, one done (via store setup).
+	// One todo with an invalidated approval, one refined, one done (via store setup).
 	stale, _ := e.CreateNode(model.KindStory, "", "stale story", "", nil)
+	approveNode(stale.ID)
+	staleBody := "changed after approval"
+	if _, err := e.UpdateNode(stale.ID, nil, &staleBody, nil); err != nil {
+		t.Fatal(err)
+	}
 	build := func(title string) string {
 		s, _ := e.CreateNode(model.KindStory, "", title, "story body", nil)
 		e.AddAC(s.ID, "g", "w", "t")
@@ -289,9 +310,9 @@ func TestKanbanIntegration_IT_28(t *testing.T) {
 	}
 	// Cards sit in their columns: the stale card before the refined column
 	// header, the refined card between refined and in-progress headers.
-	iStale := strings.Index(html, `href="#`+stale.ID+`"`)
-	iRefCard := strings.Index(html, `href="#`+refined+`"`)
-	iDoneCard := strings.Index(html, `href="#`+doneID+`"`)
+	iStale := strings.Index(html, `data-story-open="`+stale.ID+`"`)
+	iRefCard := strings.Index(html, `data-story-open="`+refined+`"`)
+	iDoneCard := strings.Index(html, `data-story-open="`+doneID+`"`)
 	if !(iStale > iTodo && iStale < iRef) {
 		t.Fatal("todo card not in todo column")
 	}
@@ -302,17 +323,18 @@ func TestKanbanIntegration_IT_28(t *testing.T) {
 		t.Fatal("done card not in done column")
 	}
 	// Stale marker on the unapproved card, none on the refined one.
-	staleCard := html[iStale : strings.Index(html[iStale:], "</a>")+iStale]
+	staleCard := html[iStale : strings.Index(html[iStale:], "</button>")+iStale]
 	if !strings.Contains(staleCard, "stale") {
 		t.Fatalf("stale card missing marker: %s", staleCard)
 	}
-	refCard := html[iRefCard : strings.Index(html[iRefCard:], "</a>")+iRefCard]
+	refCard := html[iRefCard : strings.Index(html[iRefCard:], "</button>")+iRefCard]
 	if strings.Contains(refCard, "stale") {
 		t.Fatalf("fresh card carries stale marker: %s", refCard)
 	}
-	// Details: collapsed (no open attribute) with full content inside.
-	if !strings.Contains(html, `<details class="story" id="`+refined+`">`) {
-		t.Fatal("story detail must be a collapsed details element")
+	// Details: hidden modal with full content inside.
+	if !strings.Contains(html, `id="story-`+refined+`" data-modal data-story-detail="`+refined+`"`) ||
+		!strings.Contains(html, `aria-modal="true"`) || !strings.Contains(html, `hidden>`) {
+		t.Fatal("story detail must be a hidden modal")
 	}
 	for _, want := range []string{"story body", "gates open", `class="gwt"`} {
 		if !strings.Contains(html, want) {
