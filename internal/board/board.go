@@ -23,6 +23,7 @@ type nodeView struct {
 	Title    string
 	BodyHTML template.HTML
 	Fresh    bool
+	Marker   string
 	Problems []string
 	Covers   []string
 	Paths    []string
@@ -34,17 +35,28 @@ type nodeView struct {
 }
 
 type storyView struct {
-	ID       string
-	Title    string
-	Usage    string
-	BodyHTML template.HTML
-	Status   string
-	StatusCl string
-	Fresh    bool
-	ACs      []acView
-	Children []nodeView
-	Blocked  []string
-	Paths    []string
+	ID               string
+	Title            string
+	Usage            string
+	BodyHTML         template.HTML
+	Status           string
+	StatusCl         string
+	Marker           string
+	ACs              []acView
+	Children         []nodeView
+	Blocked          []string
+	Paths            []string
+	TokensMain       *int64
+	TokensSubagents  *int64
+	CategorizedUsage []usageRowView
+}
+
+type usageRowView struct {
+	Agent      string
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
 }
 
 type ccView struct {
@@ -69,10 +81,10 @@ type termView struct {
 }
 
 type cardView struct {
-	ID    string
-	Title string
-	Fresh bool
-	Usage string
+	ID     string
+	Title  string
+	Marker string
+	Usage  string
 }
 
 type columnView struct {
@@ -211,8 +223,15 @@ func Render(e *core.Engine) (string, error) {
 		}
 		sv := storyView{
 			ID: s.ID, Title: s.Title, Usage: s.Usage, BodyHTML: tf.markup(story.Body), Status: s.Status,
-			StatusCl: strings.ReplaceAll(s.Status, "_", ""), Fresh: tree.Story.Fresh,
+			StatusCl: strings.ReplaceAll(s.Status, "_", ""), Marker: treeMarker(tree.Story, tree.Integrity),
 			Blocked: tree.Integrity, Paths: story.Paths,
+			TokensMain: s.TokensMain, TokensSubagents: s.TokensSubagents,
+		}
+		if s.TokensMainInput != nil {
+			sv.CategorizedUsage = []usageRowView{
+				{Agent: "main-agent", Input: *s.TokensMainInput, Output: *s.TokensMainOutput, CacheRead: *s.TokensMainCacheRead, CacheWrite: *s.TokensMainCacheWrite},
+				{Agent: "subagents", Input: *s.TokensSubagentsInput, Output: *s.TokensSubagentsOutput, CacheRead: *s.TokensSubagentsCacheRead, CacheWrite: *s.TokensSubagentsCacheWrite},
+			}
 		}
 		for _, ac := range tree.ACs {
 			sv.ACs = append(sv.ACs, acView{ID: ac.ID, GivenHTML: tf.markup(ac.Given),
@@ -237,7 +256,7 @@ func Render(e *core.Engine) (string, error) {
 	}
 	for _, sv := range p.Stories {
 		if col, ok := byStatus[sv.Status]; ok {
-			col.Cards = append(col.Cards, cardView{ID: sv.ID, Title: sv.Title, Fresh: sv.Fresh, Usage: sv.Usage})
+			col.Cards = append(col.Cards, cardView{ID: sv.ID, Title: sv.Title, Marker: sv.Marker, Usage: sv.Usage})
 		}
 	}
 	var b strings.Builder
@@ -247,6 +266,41 @@ func Render(e *core.Engine) (string, error) {
 	return b.String(), nil
 }
 
+func nodeStale(n core.TreeNode) bool {
+	for _, problem := range n.Problems {
+		if strings.Contains(problem, "changed since approval") ||
+			(strings.Contains(problem, "stale:") && !strings.Contains(problem, "never approved")) {
+			return true
+		}
+	}
+	for _, child := range n.Children {
+		if nodeStale(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func treeMarker(root core.TreeNode, integrity []string) string {
+	if nodeStale(root) {
+		return "stale"
+	}
+	if len(integrity) > 0 {
+		return "blocked"
+	}
+	return "fresh"
+}
+
+func nodeMarker(n core.TreeNode) string {
+	if n.Fresh {
+		return "fresh"
+	}
+	if nodeStale(n) {
+		return "stale"
+	}
+	return "draft"
+}
+
 func viewNode(e *core.Engine, tf *termifier, tn core.TreeNode, depth int) (nodeView, error) {
 	full, err := e.Node(tn.ID)
 	if err != nil {
@@ -254,7 +308,7 @@ func viewNode(e *core.Engine, tf *termifier, tn core.TreeNode, depth int) (nodeV
 	}
 	nv := nodeView{
 		ID: tn.ID, Kind: tn.Kind, KindName: kindNames[tn.Kind], Title: tn.Title,
-		BodyHTML: tf.markup(full.Body), Fresh: tn.Fresh, Problems: tn.Problems, Covers: tn.Covers,
+		BodyHTML: tf.markup(full.Body), Fresh: tn.Fresh, Marker: nodeMarker(tn), Problems: tn.Problems, Covers: tn.Covers,
 		Paths: tn.Paths, Deps: tn.Deps, Evidence: tn.Evidence, Depth: depth,
 		IsTest: model.TestSpecKinds[model.Kind(tn.Kind)],
 	}
@@ -285,7 +339,6 @@ const boardHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>trellis board — {{.Project}}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root {
   --ground: #F7F8F6; --surface: #FFFFFF; --ink: #1C221D; --muted: #5B6560;
@@ -308,14 +361,15 @@ const boardHTML = `<!doctype html>
   --stale-bg: #362321;
 }
 * { box-sizing: border-box; }
-body { background: var(--ground); color: var(--ink); margin: 0; font: 16px/1.55 "Source Sans 3", system-ui, sans-serif; }
-.wrap { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
-.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.86em; }
-h1 { font-family: Bitter, Georgia, serif; font-size: 1.9rem; margin: 0; }
+body { background: var(--ground); color: var(--ink); margin: 0; font: 16px/1.55 system-ui, sans-serif; }
+body.modal-open { overflow: hidden; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.86em; }
+h1 { font-family: Georgia, serif; font-size: 1.9rem; margin: 0; }
 h1 span { color: var(--accent); }
 .desc { color: var(--ink); margin: 8px 0 0; max-width: 65ch; }
 .sub { color: var(--muted); margin: 4px 0 28px; font-size: 0.9rem; }
-h2 { font-family: Bitter, Georgia, serif; font-size: 1.25rem; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+h2 { font-family: Georgia, serif; font-size: 1.25rem; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 22px 24px; margin: 0 0 22px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
 .chip { display: inline-flex; gap: 7px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); text-decoration: none; font-size: 0.85rem; }
@@ -336,7 +390,7 @@ tr:last-child td { border-bottom: none; }
 .nid { color: var(--accent); font-weight: 500; margin-right: 8px; }
 .kind { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); background: var(--accent-soft); border-radius: 3px; padding: 2px 6px; margin-right: 8px; }
 .mark { font-size: 0.72rem; font-weight: 600; margin-left: 6px; }
-.ok { color: var(--done); } .stale { color: var(--stale); }
+.ok { color: var(--done); } .stale { color: var(--stale); } .blocked { color: var(--inprogress); } .draft { color: var(--muted); }
 .meta { color: var(--muted); font-size: 0.85rem; }
 .body { color: var(--muted); font-size: 0.92rem; max-width: 68ch; margin: 8px 0 4px; white-space: pre-line; }
 .problem { color: var(--stale); background: var(--stale-bg); border-radius: 4px; padding: 6px 10px; margin: 6px 0; font-size: 0.88rem; }
@@ -350,69 +404,149 @@ a.term { color: inherit; text-decoration: underline dotted var(--accent); text-u
 .col { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
 .colh { margin: 0 0 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; display: flex; justify-content: space-between; }
 .count { color: var(--muted); font-weight: 400; }
-.scard { display: block; background: var(--ground); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 0 0 8px; color: var(--ink); text-decoration: none; font-size: 0.88rem; line-height: 1.35; }
-.scard:hover { border-color: var(--accent); }
+.scard { display: block; width: 100%; text-align: left; font: inherit; background: var(--ground); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 0 0 8px; color: var(--ink); cursor: pointer; font-size: 0.88rem; line-height: 1.35; }
+.scard:hover, .scard:focus-visible { border-color: var(--accent); outline: none; }
 .scard .mono { color: var(--accent); display: block; margin-bottom: 2px; }
-details.story { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px 24px; margin: 0 0 14px; }
-details.story > summary { cursor: pointer; list-style: none; font-family: Bitter, Georgia, serif; font-size: 1.15rem; font-weight: 600; }
-details.story > summary::-webkit-details-marker { display: none; }
-details.story[open] > summary { margin-bottom: 12px; }
+.card-title { display: block; }
+.card-marker { display: inline-block; margin-top: 5px; }
+.card-marker.blocked { color: var(--inprogress); }
+.modal[hidden] { display: none; }
+.modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: stretch; justify-content: flex-end; background: rgb(0 0 0 / 0.46); padding-left: min(18vw, 220px); }
+.story-detail { width: min(900px, 100%); height: 100%; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--line); box-shadow: -10px 0 32px rgb(0 0 0 / 0.22); padding: 28px 34px 48px; }
+.story-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 20px; }
+.story-detail-head h2 { font-size: 1.45rem; margin: 0; }
+.story-detail-close, .context-open { border: 1px solid var(--line); background: var(--ground); color: var(--ink); border-radius: 4px; padding: 6px 10px; cursor: pointer; font: inherit; }
+.story-detail-close:hover, .story-detail-close:focus-visible, .context-open:hover, .context-open:focus-visible { border-color: var(--accent); outline: none; }
+.context-open { margin: 0 0 18px; }
+.story-detail-section { margin: 22px 0; }
+.story-detail-section h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+@media (max-width: 720px) { .modal { padding-left: 16px; } .story-detail { padding: 22px 18px 40px; } }
 a.term:hover { color: var(--accent); }
 </style></head><body>
 <div class="wrap">
+<div id="board-overview">
 <h1><span>trellis</span> board</h1>
 {{if .Desc}}<p class="desc">{{.Desc}}</p>{{end}}
 <p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
+<button type="button" class="context-open" data-context-open aria-controls="project-context">Project context</button>
 <div class="kanban">
 {{range .Columns}}<div class="col"><h3 class="colh st-{{.Cl}}">{{.Label}}<span class="count">{{len .Cards}}</span></h3>
-{{range .Cards}}<a class="scard" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}{{if not .Fresh}} <span class="mark stale">stale</span>{{end}}{{if .Usage}} <span class="meta mono">{{.Usage}}</span>{{end}}</a>
+{{range .Cards}}<button type="button" class="scard" data-story-open="{{.ID}}" aria-controls="story-{{.ID}}"><span class="mono">{{.ID}}</span><span class="card-title">{{.Title}}</span><span class="mark card-marker {{.Marker}}">{{.Marker}}</span>{{if .Usage}}<span class="meta mono">{{.Usage}}</span>{{end}}</button>
 {{end}}</div>{{end}}
 </div>
+</div>
 
+<div class="modal" id="project-context" data-modal role="dialog" aria-modal="true" aria-labelledby="project-context-title" hidden><article class="story-detail">
+<header class="story-detail-head"><h2 id="project-context-title">Project context</h2><button type="button" class="story-detail-close" data-modal-close aria-label="Close project context">Close</button></header>
 {{if .Coverage}}<section id="coverage"><h2>Coverage <span class="state">{{.Coverage.TotalPct}}</span></h2>
 {{if .Coverage.Gaps}}<table><thead><tr><th>Largest gaps</th><th></th></tr></thead><tbody>
 {{range .Coverage.Gaps}}<tr><td class="mono">{{.File}}</td><td class="{{if .Low}}stale{{else}}covpct{{end}}">{{.Pct}}</td></tr>
 {{end}}</tbody></table>{{else}}<p class="meta">no gaps — every measured file fully covered</p>{{end}}
 <p class="meta">observability, not a gate: closing a gap stays a judgment call</p></section>{{end}}
-
 {{if .Glossary}}<section id="glossary"><h2>Glossary</h2><table><tbody>
 {{range .Glossary}}<tr id="{{.Anchor}}"><td class="mono">{{.Term}}</td><td>{{.Definition}}</td></tr>
 {{end}}</tbody></table></section>{{end}}
-
 <section><h2>Cross-cutting architecture</h2>
-{{range .CCs}}<details class="node d1" id="{{.ID}}" open><summary><span class="mono nid">{{.ID}}</span><span class="kind">Cross-cutting</span> {{.Title}} {{if .Accepted}}<span class="mark ok">accepted</span>{{else}}<span class="mark stale">draft / stale</span>{{end}}</summary><div class="body">{{.BodyHTML}}</div></details>
+{{range .CCs}}<details class="node d1" id="{{.ID}}" open><summary><span class="mono nid">{{.ID}}</span><span class="kind">Cross-cutting</span> {{.Title}} {{if .Accepted}}<span class="mark ok">accepted</span>{{else}}<span class="mark draft">not accepted</span>{{end}}</summary><div class="body">{{.BodyHTML}}</div></details>
 {{end}}</section>
+</article></div>
 
 {{range .Stories}}
-<details class="story" id="{{.ID}}">
-<summary><span class="mono nid">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}{{if .Usage}} <span class="meta mono">{{.Usage}}</span>{{end}}</summary>
-<p class="storybody">{{.BodyHTML}}</p>
-{{if .Paths}}<p class="meta">code: <span class="mono">{{join .Paths}}</span></p>{{end}}
-{{if .ACs}}<table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
+<div class="modal" id="story-{{.ID}}" data-modal data-story-detail="{{.ID}}" role="dialog" aria-modal="true" aria-labelledby="story-title-{{.ID}}" hidden>
+<article class="story-detail">
+<header class="story-detail-head"><div><span class="mono nid">{{.ID}}</span><h2 id="story-title-{{.ID}}">{{.Title}}</h2><span class="state st-{{.StatusCl}}">{{.Status}}</span><span class="mark {{if eq .Marker "fresh"}}ok{{else if eq .Marker "blocked"}}blocked{{else}}stale{{end}}">{{.Marker}}</span></div><button type="button" class="story-detail-close" data-modal-close aria-label="Close story detail">Close</button></header>
+<div class="story-detail-section"><h3>Description</h3><p class="storybody">{{.BodyHTML}}</p></div>
+<div class="story-detail-section"><h3>Declared paths</h3>{{if .Paths}}<p class="meta"><span class="mono">{{join .Paths}}</span></p>{{else}}<p class="meta">none declared</p>{{end}}</div>
+<div class="story-detail-section"><h3>Token usage</h3>{{if .Usage}}<p class="meta mono">{{.Usage}}</p>{{else}}<p class="meta">not reported</p>{{end}}
+{{if or .TokensMain .TokensSubagents}}<p class="meta">uncategorized token usage: main-agent <span class="mono">{{if .TokensMain}}{{.TokensMain}}{{else}}0{{end}}</span> · subagents <span class="mono">{{if .TokensSubagents}}{{.TokensSubagents}}{{else}}0{{end}}</span></p>{{end}}
+{{if .CategorizedUsage}}<table><thead><tr><th>Agent</th><th>input</th><th>output</th><th>cache_read</th><th>cache_write</th></tr></thead><tbody>{{range .CategorizedUsage}}<tr><td>{{.Agent}}</td><td class="mono">{{.Input}}</td><td class="mono">{{.Output}}</td><td class="mono">{{.CacheRead}}</td><td class="mono">{{.CacheWrite}}</td></tr>{{end}}</tbody></table>{{else}}<p class="meta">categorized token usage not reported</p>{{end}}</div>
+{{if .ACs}}<div class="story-detail-section"><h3>Acceptance criteria</h3><table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
 {{range .ACs}}<tr><td class="mono">{{.ID}}</td><td><span class="gwt">Given</span> {{.GivenHTML}}<br><span class="gwt">When</span> {{.WhenHTML}}<br><span class="gwt">Then</span> {{.ThenHTML}}</td><td class="mono cov">{{join .CoveredBy}}</td></tr>
-{{end}}</tbody></table>{{end}}
-{{range .Children}}{{template "node" .}}{{end}}
+{{end}}</tbody></table></div>{{end}}
+<div class="story-detail-section"><h3>Spec tree and test evidence</h3>{{range .Children}}{{template "node" .}}{{end}}</div>
 {{if .Blocked}}<p class="gates stale">blocked</p>{{range .Blocked}}<div class="problem">{{.}}</div>{{end}}{{else}}<p class="gates ok">gates open</p>{{end}}
-</details>
+</article></div>
 {{end}}
 </div>
 <script>
-function openTarget() {
-	var id = location.hash && location.hash.slice(1);
-	if (!id) return;
-	var el = document.getElementById(id);
-	var walk = el;
-	while (walk) { if (walk.tagName === 'DETAILS') walk.open = true; walk = walk.parentElement; }
-	if (el) el.scrollIntoView();
-}
-window.addEventListener('hashchange', openTarget);
-openTarget();
+(function () {
+	var activeTrigger = null;
+	var overview = document.getElementById('board-overview');
+	function setOverviewInert(inert) {
+		overview.inert = inert;
+		if (inert) overview.setAttribute('aria-hidden', 'true');
+		else overview.removeAttribute('aria-hidden');
+	}
+	function closeStoryDetail(modal) {
+		if (!modal) return;
+		modal.hidden = true;
+		document.body.classList.remove('modal-open');
+		setOverviewInert(false);
+		if (activeTrigger) activeTrigger.focus();
+		activeTrigger = null;
+	}
+	function openStoryDetail(modal, trigger) {
+		if (!modal) return;
+		activeTrigger = trigger;
+		modal.hidden = false;
+		document.body.classList.add('modal-open');
+		setOverviewInert(true);
+		var close = modal.querySelector('[data-modal-close]');
+		if (close) close.focus();
+	}
+	function revealLinkTarget(link) {
+		var fragment = link.getAttribute('href').slice(1);
+		var target = document.getElementById(fragment) || document.getElementById('story-' + fragment);
+		var owner = target && target.closest('[data-modal]');
+		if (!owner) return false;
+		var returnTrigger = activeTrigger || link;
+		var visible = document.querySelector('[data-modal]:not([hidden])');
+		if (visible) visible.hidden = true;
+		openStoryDetail(owner, returnTrigger);
+		for (var parent = target; parent && parent !== owner; parent = parent.parentElement) {
+			if (parent.tagName === 'DETAILS') parent.open = true;
+		}
+		if (target !== owner) {
+			target.setAttribute('tabindex', '-1');
+			target.focus({preventScroll: true});
+			target.scrollIntoView();
+		}
+		return true;
+	}
+	document.addEventListener('click', function (event) {
+		var storyOpener = event.target.closest('[data-story-open]');
+		if (storyOpener) { openStoryDetail(document.getElementById('story-' + storyOpener.getAttribute('data-story-open')), storyOpener); return; }
+		var contextOpener = event.target.closest('[data-context-open]');
+		if (contextOpener) { openStoryDetail(document.getElementById('project-context'), contextOpener); return; }
+		var detailLink = event.target.closest('a[href^="#"]');
+		if (detailLink && revealLinkTarget(detailLink)) { event.preventDefault(); return; }
+		var close = event.target.closest('[data-modal-close]');
+		if (close) { closeStoryDetail(close.closest('[data-modal]')); return; }
+		if (event.target.matches('[data-modal]')) closeStoryDetail(event.target);
+	});
+	document.addEventListener('keydown', function (event) {
+		var modal = document.querySelector('[data-modal]:not([hidden])');
+		if (event.key === 'Escape') { closeStoryDetail(modal); return; }
+		if (event.key !== 'Tab' || !modal) return;
+		var focusable = Array.prototype.filter.call(modal.querySelectorAll('button, [href], summary, [tabindex]:not([tabindex="-1"])'), function (element) {
+			return element.offsetParent !== null && !element.hasAttribute('disabled');
+		});
+		if (!focusable.length) { event.preventDefault(); return; }
+		var first = focusable[0];
+		var last = focusable[focusable.length - 1];
+		if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+			event.preventDefault(); last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault(); first.focus();
+		}
+	});
+}());
 </script>
 </body></html>
 
 {{define "node"}}<details class="node {{depthClass .Depth}}" id="{{.ID}}"{{if lt .Depth 2}} open{{end}}>
 <summary><span class="mono nid">{{.ID}}</span><span class="kind">{{.KindName}}</span> {{.Title}}
-{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}
+{{if eq .Marker "fresh"}}<span class="mark ok">fresh</span>{{else if eq .Marker "stale"}}<span class="mark stale">stale</span>{{else}}<span class="mark draft">draft</span>{{end}}
 <span class="meta">{{if .Covers}} · covers <span class="mono">{{join .Covers}}</span>{{end}}{{range .Deps}} · needs <a class="mono {{if .Fresh}}ok{{else}}stale{{end}}" href="#{{.Target}}">{{.Target}}</a>{{end}}</span></summary>
 {{if .BodyHTML}}<div class="body">{{.BodyHTML}}</div>{{end}}
 {{if .Evidence}}<div class="evidence">proved by <span class="mono">{{join .Evidence.Tests}}</span> · {{.Evidence.RecordedAt}}</div>{{else if .IsTest}}<div class="evidence stale">no test evidence recorded yet</div>{{end}}
