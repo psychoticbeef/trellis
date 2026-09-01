@@ -39,7 +39,7 @@ func assertPolishedTokenHTML(t *testing.T, html string) {
 		`title="1000000">1.0M</td>`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("board missing formatted token value %q", want)
+			t.Errorf("board missing formatted categorized token usage value %q", want)
 		}
 	}
 	if strings.Contains(html, "observability, not a gate: closing a gap stays a judgment call") {
@@ -70,7 +70,7 @@ func TestBoardFormattingAndMeta_UT_45(t *testing.T) {
 }
 
 // TestStaticLiveAndMultiBoardPolish_IT_42 proves IT-42: static, single-board,
-// and multi-project handlers share polished categorized token rendering.
+// and multi-project handlers share polished categorized token usage rendering.
 func TestStaticLiveAndMultiBoardPolish_IT_42(t *testing.T) {
 	e, st := newEngine(t)
 	categorizedPolishStory(t, e)
