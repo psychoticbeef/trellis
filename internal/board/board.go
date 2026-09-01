@@ -53,10 +53,34 @@ type storyView struct {
 
 type usageRowView struct {
 	Agent      string
-	Input      int64
-	Output     int64
-	CacheRead  int64
-	CacheWrite int64
+	Input      tokenValueView
+	Output     tokenValueView
+	CacheRead  tokenValueView
+	CacheWrite tokenValueView
+}
+
+type tokenValueView struct {
+	Display string
+	Exact   int64
+}
+
+func tokenValue(value int64) tokenValueView {
+	display := fmt.Sprintf("%d", value)
+	switch {
+	case value >= 1_000_000:
+		tenths := value / 100_000
+		if value%100_000 >= 50_000 {
+			tenths++
+		}
+		display = fmt.Sprintf("%d.%dM", tenths/10, tenths%10)
+	case value >= 1_000:
+		thousands := value / 1_000
+		if value%1_000 >= 500 {
+			thousands++
+		}
+		display = fmt.Sprintf("%dk", thousands)
+	}
+	return tokenValueView{Display: display, Exact: value}
 }
 
 type ccView struct {
@@ -229,8 +253,8 @@ func Render(e *core.Engine) (string, error) {
 		}
 		if s.TokensMainInput != nil {
 			sv.CategorizedUsage = []usageRowView{
-				{Agent: "main-agent", Input: *s.TokensMainInput, Output: *s.TokensMainOutput, CacheRead: *s.TokensMainCacheRead, CacheWrite: *s.TokensMainCacheWrite},
-				{Agent: "subagents", Input: *s.TokensSubagentsInput, Output: *s.TokensSubagentsOutput, CacheRead: *s.TokensSubagentsCacheRead, CacheWrite: *s.TokensSubagentsCacheWrite},
+				{Agent: "main-agent", Input: tokenValue(*s.TokensMainInput), Output: tokenValue(*s.TokensMainOutput), CacheRead: tokenValue(*s.TokensMainCacheRead), CacheWrite: tokenValue(*s.TokensMainCacheWrite)},
+				{Agent: "subagents", Input: tokenValue(*s.TokensSubagentsInput), Output: tokenValue(*s.TokensSubagentsOutput), CacheRead: tokenValue(*s.TokensSubagentsCacheRead), CacheWrite: tokenValue(*s.TokensSubagentsCacheWrite)},
 			}
 		}
 		for _, ac := range tree.ACs {
@@ -442,7 +466,7 @@ a.term:hover { color: var(--accent); }
 {{if .Coverage.Gaps}}<table><thead><tr><th>Largest gaps</th><th></th></tr></thead><tbody>
 {{range .Coverage.Gaps}}<tr><td class="mono">{{.File}}</td><td class="{{if .Low}}stale{{else}}covpct{{end}}">{{.Pct}}</td></tr>
 {{end}}</tbody></table>{{else}}<p class="meta">no gaps — every measured file fully covered</p>{{end}}
-<p class="meta">observability, not a gate: closing a gap stays a judgment call</p></section>{{end}}
+</section>{{end}}
 {{if .Glossary}}<section id="glossary"><h2>Glossary</h2><table><tbody>
 {{range .Glossary}}<tr id="{{.Anchor}}"><td class="mono">{{.Term}}</td><td>{{.Definition}}</td></tr>
 {{end}}</tbody></table></section>{{end}}
@@ -459,7 +483,7 @@ a.term:hover { color: var(--accent); }
 <div class="story-detail-section"><h3>Declared paths</h3>{{if .Paths}}<p class="meta"><span class="mono">{{join .Paths}}</span></p>{{else}}<p class="meta">none declared</p>{{end}}</div>
 <div class="story-detail-section"><h3>Token usage</h3>{{if .Usage}}<p class="meta mono">{{.Usage}}</p>{{else}}<p class="meta">not reported</p>{{end}}
 {{if or .TokensMain .TokensSubagents}}<p class="meta">uncategorized token usage: main-agent <span class="mono">{{if .TokensMain}}{{.TokensMain}}{{else}}0{{end}}</span> · subagents <span class="mono">{{if .TokensSubagents}}{{.TokensSubagents}}{{else}}0{{end}}</span></p>{{end}}
-{{if .CategorizedUsage}}<table><thead><tr><th>Agent</th><th>input</th><th>output</th><th>cache_read</th><th>cache_write</th></tr></thead><tbody>{{range .CategorizedUsage}}<tr><td>{{.Agent}}</td><td class="mono">{{.Input}}</td><td class="mono">{{.Output}}</td><td class="mono">{{.CacheRead}}</td><td class="mono">{{.CacheWrite}}</td></tr>{{end}}</tbody></table>{{else}}<p class="meta">categorized token usage not reported</p>{{end}}</div>
+{{if .CategorizedUsage}}<table><thead><tr><th>Agent</th><th>input</th><th>output</th><th>cache_read</th><th>cache_write</th></tr></thead><tbody>{{range .CategorizedUsage}}<tr><td>{{.Agent}}</td><td class="mono" title="{{.Input.Exact}}">{{.Input.Display}}</td><td class="mono" title="{{.Output.Exact}}">{{.Output.Display}}</td><td class="mono" title="{{.CacheRead.Exact}}">{{.CacheRead.Display}}</td><td class="mono" title="{{.CacheWrite.Exact}}">{{.CacheWrite.Display}}</td></tr>{{end}}</tbody></table>{{else}}<p class="meta">categorized token usage not reported</p>{{end}}</div>
 {{if .ACs}}<div class="story-detail-section"><h3>Acceptance criteria</h3><table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
 {{range .ACs}}<tr><td class="mono">{{.ID}}</td><td><span class="gwt">Given</span> {{.GivenHTML}}<br><span class="gwt">When</span> {{.WhenHTML}}<br><span class="gwt">Then</span> {{.ThenHTML}}</td><td class="mono cov">{{join .CoveredBy}}</td></tr>
 {{end}}</tbody></table></div>{{end}}
