@@ -54,3 +54,25 @@ func TestAuditUnit_UT_34(t *testing.T) {
 		t.Fatalf("envelope: %s", b)
 	}
 }
+
+// TestUnclaimedFileViolation_UT_40 proves UT-40 (DD-40 "Unclaimed-file
+// violation aggregation"): complete sorted unclaimed set, path coverage, and
+// unchanged meta-file exclusions.
+func TestUnclaimedFileViolation_UT_40(t *testing.T) {
+	tracked := strings.Join([]string{
+		"z/orphan.go",
+		"README.md",
+		"pkg/claimed.go",
+		".github/workflows/test.yml",
+		"a/orphan.go",
+		"go.mod",
+	}, "\n")
+	got := unclaimedFiles(tracked, []string{"pkg"})
+	want := []string{"a/orphan.go", "z/orphan.go"}
+	if len(got) != len(want) || strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unclaimed files = %v, want %v", got, want)
+	}
+	if got := unclaimedFiles("README.md\ngo.mod\n", nil); len(got) != 0 {
+		t.Fatalf("meta files became unclaimed: %v", got)
+	}
+}

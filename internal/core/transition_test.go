@@ -1273,8 +1273,8 @@ func TestCoverageIntegration_IT_32(t *testing.T) {
 }
 
 // TestAuditIntegration_IT_33 proves IT-33 (US-33 "Bidirectional audit"):
-// the full rot matrix — clean repo, broken done evidence, missing declared
-// path, dangling spec reference, unbound test and unclaimed file as infos.
+// full rot matrix — broken done evidence, missing declared path, dangling spec
+// reference, unbound test info, and unclaimed-file violation.
 func TestAuditIntegration_IT_33(t *testing.T) {
 	e, st := newEngineStore(t)
 	repo := t.TempDir()
@@ -1295,7 +1295,7 @@ func TestAuditIntegration_IT_33(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := fullTree(t, e)
-	if _, err := e.SetPaths(tr.story, []string{"pkg"}); err != nil {
+	if _, err := e.SetPaths(tr.story, []string{"pkg", "report-src.xml"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, verb := range []string{"refine", "start"} {
@@ -1311,17 +1311,17 @@ func TestAuditIntegration_IT_33(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Clean state: no violations; orphan file listed informationally.
+	// Unclaimed source file is an exhaustive violation, not info.
 	rep, err := e.Audit()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Violations) != 0 {
-		t.Fatalf("clean repo has violations: %v", rep.Violations)
-	}
-	joined := strings.Join(rep.Infos, "\n")
+	joined := strings.Join(rep.Violations, "\n")
 	if !strings.Contains(joined, "stray/orphan.go") || strings.Contains(joined, "pkg/impl.go") {
-		t.Fatalf("unclaimed info wrong: %s", joined)
+		t.Fatalf("unclaimed violation wrong: %s", joined)
+	}
+	if strings.Contains(strings.Join(rep.Infos, "\n"), "claimed by no story") {
+		t.Fatalf("unclaimed files remained informational: %v", rep.Infos)
 	}
 
 	// Seed rot: rename the UT-1 test away (done evidence breaks), add a test
@@ -1351,6 +1351,64 @@ func TestAuditIntegration_IT_33(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(rep.Infos, "\n"), "unbound") {
 		t.Errorf("unbound info missing: %v", rep.Infos)
+	}
+}
+
+// TestUnclaimedFilesAuditOnly_IT_38 proves IT-38 (US-38): unclaimed files
+// join every other audit violation exhaustively while finish remains unchanged.
+func TestUnclaimedFilesAuditOnly_IT_38(t *testing.T) {
+	e, st := newEngineStore(t)
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "develop")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "reports/\n.trellis-worktrees/\n")
+	writeFile(t, filepath.Join(repo, "report-src.xml"),
+		`<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/><testcase name="Test_UT_999"/><testcase name="TestFreeFloating"/></testsuite>`)
+	writeFile(t, filepath.Join(repo, "pkg/claimed.go"), "package pkg")
+	writeFile(t, filepath.Join(repo, "stray/z.go"), "package stray")
+	writeFile(t, filepath.Join(repo, "stray/a.go"), "package stray")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+	p := e.Project
+	p.RepoPath, p.LintCmd, p.JUnitGlob = repo, "true", "reports/*.xml"
+	p.TestCmd = "mkdir -p reports && cp report-src.xml reports/report.xml"
+	if err := st.UpdateProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadProject(); err != nil {
+		t.Fatal(err)
+	}
+	tr := fullTree(t, e)
+	if _, err := e.SetPaths(tr.story, []string{"report-src.xml", "pkg", "impl.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"refine", "start"} {
+		if _, err := e.Transition(tr.story, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+	wt := wtPath(repo, tr.story)
+	writeFile(t, filepath.Join(wt, "impl.txt"), "implementation")
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-m", "implementation")
+	if _, err := e.Transition(tr.story, "finish"); err != nil {
+		t.Fatalf("finish must ignore unclaimed files: %v", err)
+	}
+
+	rep, err := e.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(rep.Violations, "\n")
+	for _, want := range []string{"references nonexistent spec UT-999", "stray/a.go", "stray/z.go"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("violations missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Index(joined, "stray/a.go") > strings.Index(joined, "stray/z.go") {
+		t.Errorf("unclaimed files not sorted: %s", joined)
+	}
+	if !strings.Contains(strings.Join(rep.Infos, "\n"), "unbound") {
+		t.Errorf("unbound test must remain info: %v", rep.Infos)
 	}
 }
 

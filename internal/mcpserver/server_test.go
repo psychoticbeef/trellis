@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -827,6 +828,52 @@ func TestSchemaLintIntegration_IT_30(t *testing.T) {
 		Arguments: map[string]any{"query": "zzz-nothing"}})
 	if got := strings.TrimSpace(text(res)); got != `{"hits":[]}` {
 		t.Fatalf("empty hits envelope = %q", got)
+	}
+}
+
+// TestUnclaimedFilesMCPAcceptance_AT_42 proves AT-42 (US-38) at the actual
+// MCP boundary: report arrays stay machine-readable and exhaustive.
+func TestUnclaimedFilesMCPAcceptance_AT_42(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	for name, content := range map[string]string{
+		".gitignore":     "reports/\n.trellis-worktrees/\n",
+		"report-src.xml": `<?xml version="1.0"?><testsuite><testcase name="Test_UT_999"/><testcase name="TestFreeFloating"/></testsuite>`,
+		"a/orphan.go":    "package orphan",
+		"z/orphan.go":    "package orphan",
+		"README.md":      "meta",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"})
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "claim fixture"})["id"].(string)
+	call(t, cs, "set_paths", map[string]any{"story_id": story, "paths": []string{"report-src.xml"}})
+
+	out := call(t, cs, "audit", map[string]any{})
+	violations, ok := out["violations"].([]any)
+	if !ok || len(violations) != 2 {
+		t.Fatalf("machine-readable exhaustive violations: %#v", out)
+	}
+	joined := fmt.Sprint(violations)
+	for _, want := range []string{"references nonexistent spec UT-999", "2 file(s) claimed by no story", "a/orphan.go", "z/orphan.go"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("MCP violations missing %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "README.md") {
+		t.Fatalf("meta file became violation: %s", joined)
+	}
+	infos, ok := out["infos"].([]any)
+	if !ok || !strings.Contains(fmt.Sprint(infos), "unbound") {
+		t.Fatalf("unbound test must remain machine-readable info: %#v", out)
 	}
 }
 
