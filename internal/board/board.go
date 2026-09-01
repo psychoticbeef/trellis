@@ -36,6 +36,7 @@ type nodeView struct {
 type storyView struct {
 	ID       string
 	Title    string
+	Usage    string
 	BodyHTML template.HTML
 	Status   string
 	StatusCl string
@@ -71,6 +72,7 @@ type cardView struct {
 	ID    string
 	Title string
 	Fresh bool
+	Usage string
 }
 
 type columnView struct {
@@ -208,7 +210,7 @@ func Render(e *core.Engine) (string, error) {
 			return "", err
 		}
 		sv := storyView{
-			ID: s.ID, Title: s.Title, BodyHTML: tf.markup(story.Body), Status: s.Status,
+			ID: s.ID, Title: s.Title, Usage: s.Usage, BodyHTML: tf.markup(story.Body), Status: s.Status,
 			StatusCl: strings.ReplaceAll(s.Status, "_", ""), Fresh: tree.Story.Fresh,
 			Blocked: tree.Integrity, Paths: story.Paths,
 		}
@@ -235,7 +237,7 @@ func Render(e *core.Engine) (string, error) {
 	}
 	for _, sv := range p.Stories {
 		if col, ok := byStatus[sv.Status]; ok {
-			col.Cards = append(col.Cards, cardView{ID: sv.ID, Title: sv.Title, Fresh: sv.Fresh})
+			col.Cards = append(col.Cards, cardView{ID: sv.ID, Title: sv.Title, Fresh: sv.Fresh, Usage: sv.Usage})
 		}
 	}
 	var b strings.Builder
@@ -363,7 +365,7 @@ a.term:hover { color: var(--accent); }
 <p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
 <div class="kanban">
 {{range .Columns}}<div class="col"><h3 class="colh st-{{.Cl}}">{{.Label}}<span class="count">{{len .Cards}}</span></h3>
-{{range .Cards}}<a class="scard" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}{{if not .Fresh}} <span class="mark stale">stale</span>{{end}}</a>
+{{range .Cards}}<a class="scard" href="#{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}{{if not .Fresh}} <span class="mark stale">stale</span>{{end}}{{if .Usage}} <span class="meta mono">{{.Usage}}</span>{{end}}</a>
 {{end}}</div>{{end}}
 </div>
 
@@ -383,7 +385,7 @@ a.term:hover { color: var(--accent); }
 
 {{range .Stories}}
 <details class="story" id="{{.ID}}">
-<summary><span class="mono nid">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}</summary>
+<summary><span class="mono nid">{{.ID}}</span> {{.Title}} <span class="state st-{{.StatusCl}}">{{.Status}}</span>{{if .Fresh}}<span class="mark ok">approved</span>{{else}}<span class="mark stale">stale</span>{{end}}{{if .Usage}} <span class="meta mono">{{.Usage}}</span>{{end}}</summary>
 <p class="storybody">{{.BodyHTML}}</p>
 {{if .Paths}}<p class="meta">code: <span class="mono">{{join .Paths}}</span></p>{{end}}
 {{if .ACs}}<table><thead><tr><th>AC</th><th>Criterion</th><th>Covered by</th></tr></thead><tbody>
