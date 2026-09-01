@@ -385,10 +385,13 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 }
 
 type StorySummary struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`
-	Ready  bool   `json:"gates_open"`
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Status          string `json:"status"`
+	Ready           bool   `json:"gates_open"`
+	TokensMain      *int64 `json:"tokens_main,omitempty"`
+	TokensSubagents *int64 `json:"tokens_subagents,omitempty"`
+	Usage           string `json:"usage,omitempty"`
 }
 
 type CCSummary struct {
@@ -455,7 +458,18 @@ func (e *Engine) Overview() (Overview, error) {
 		if err != nil {
 			return o, err
 		}
-		o.Stories = append(o.Stories, StorySummary{ID: s.ID, Title: s.Title, Status: s.Status, Ready: len(problems) == 0})
+		summary := StorySummary{ID: s.ID, Title: s.Title, Status: s.Status, Ready: len(problems) == 0}
+		usage, ok, err := e.st.GetStoryUsage(e.pid(), s.ID)
+		if err != nil {
+			return o, err
+		}
+		if ok {
+			main, subagents := usage.TokensMain, usage.TokensSubagents
+			summary.TokensMain = &main
+			summary.TokensSubagents = &subagents
+			summary.Usage = FormatUsage(main, subagents)
+		}
+		o.Stories = append(o.Stories, summary)
 	}
 	ccs, err := e.st.ListNodesByKind(e.pid(), model.KindCrossCutting)
 	if err != nil {

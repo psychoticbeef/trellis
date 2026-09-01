@@ -1,7 +1,7 @@
 // trellis: deterministic spec tracking and story gating for LLM-driven development.
 //
 // The agent talks to trellis only via MCP (trellis serve); the CLI is the
-// human's window: init, config, inspection, prune.
+// human's window plus the trusted extension's token-usage reporting boundary.
 package main
 
 import (
@@ -36,6 +36,8 @@ Usage:
       --repo <path> --base <branch> --lint <cmd> --test <cmd> --junit <glob>
   trellis serve --project <project-id> [--board-addr <addr>]   run MCP server (stdio) + board UI (default 127.0.0.1:7420, off disables)
   trellis tree <project-id> <story-id>                         print a story's spec tree
+  trellis usage add <project-id> <story-id> --main N --subagents N
+                                                               accumulate trusted extension token usage
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree
   trellis affected <project-id> <path>                         stories declaring a file/folder
@@ -75,6 +77,8 @@ func run(args []string) error {
 		return cmdServe(rest)
 	case "tree":
 		return cmdTree(rest)
+	case "usage":
+		return cmdUsage(rest)
 	case "log":
 		return cmdLog(rest)
 	case "prune":

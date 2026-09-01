@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS evidence (
 	recorded_at TEXT NOT NULL,
 	PRIMARY KEY (project_id, node_id)
 );
+CREATE TABLE IF NOT EXISTS story_usage (
+	project_id       TEXT NOT NULL,
+	story_id         TEXT NOT NULL,
+	tokens_main      INTEGER NOT NULL CHECK (tokens_main >= 0),
+	tokens_subagents INTEGER NOT NULL CHECK (tokens_subagents >= 0),
+	PRIMARY KEY (project_id, story_id)
+);
 CREATE TABLE IF NOT EXISTS coverage (
 	project_id  TEXT NOT NULL,
 	file        TEXT NOT NULL,
@@ -372,6 +379,9 @@ func (s *Store) DeleteNode(projectID, id string) error {
 		return err
 	}
 	if _, err := s.db.Exec(`DELETE FROM specs_fts WHERE project_id=? AND node_id=?`, projectID, id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM story_usage WHERE project_id=? AND story_id=?`, projectID, id); err != nil {
 		return err
 	}
 	return s.DeleteEvidence(projectID, id)
