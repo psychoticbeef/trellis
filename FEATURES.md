@@ -40,6 +40,7 @@
 - **US-35** — Next story
 - **US-36** — Coverage delta
 - **US-37** — Token usage per story
+- **US-38** — Unclaimed files fail audit
 
 ## Glossary
 
