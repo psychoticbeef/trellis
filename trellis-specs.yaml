@@ -14,6 +14,8 @@ glossary:
       definition: Hash-proof that a reviewer read a node's current content; parents before children, dependencies re-pinned.
     - term: base branch
       definition: The branch that only receives trellis merges (default develop); direct commits are gate-blocked.
+    - term: categorized token usage
+      definition: Token usage split into input, output, cache_read, and cache_write for main-agent and subagents.
     - term: cross-cutting spec
       definition: Root-level architecture decision, referenced from arch specs via hash-pinned dependency links.
     - term: evidence
@@ -36,14 +38,16 @@ glossary:
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
     - term: token usage
       definition: Persisted per-story counts for main-agent and subagent tokens.
+    - term: uncategorized token usage
+      definition: Token usage stored only as main-agent and subagent totals.
 counters:
-    AS: 38
-    AT: 42
+    AS: 40
+    AT: 44
     CC: 4
-    DD: 40
-    IT: 38
-    US: 38
-    UT: 40
+    DD: 43
+    IT: 40
+    US: 40
+    UT: 43
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -82,6 +86,8 @@ counters:
     ac:US-36: 2
     ac:US-37: 5
     ac:US-38: 3
+    ac:US-39: 5
+    ac:US-40: 3
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2666,7 +2672,7 @@ stories:
         - id: AS-37
           kind: arch
           title: Atomic CLI-only token usage accounting
-          body: 'Token usage is persisted by story as separate main-agent and subagent counters. A guarded engine mutation validates the existing story and nonnegative integer inputs, then uses one atomic database upsert to increment both counters without lost updates. The CLI exposes usage add; MCP deliberately exposes no write tool because extension code, not an agent, reports usage. Successful reports append an event. get_overview carries optional usage, and the board renders the same shared compact formatter: values below 1000 raw, otherwise floor(value/1000)k. No cost conversion exists.'
+          body: 'Uncategorized token usage is persisted by story as separate main-agent and subagent counters. A guarded engine mutation validates the existing story and nonnegative integer inputs, then uses one atomic database upsert to increment both counters without lost updates. The CLI exposes usage add; MCP deliberately exposes no write tool because extension code, not an agent, reports usage. Successful reports append an event. get_overview carries optional usage, and the board renders the same shared compact formatter: values below 1000 raw, otherwise floor(value/1000)k. Categorized token usage added by US-39 extends storage and formatter while preserving this uncategorized form. No cost conversion exists.'
           depends_on:
             - target: CC-1
               pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
@@ -2674,7 +2680,7 @@ stories:
               pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
             - target: CC-3
               pinned_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
-          approved_content_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+          approved_content_hash: 896d6fcda4ed34ebdf235a32547aab22af117820beb82c96a0e438f8b644fd4c
           approved_parent_hash: c8641b954410b45c876e303a440cdeec7f3db34d0013499cb7d8d4dd030e2af7
           children:
             - id: DD-38
@@ -2682,7 +2688,7 @@ stories:
               title: Usage persistence and CLI command
               body: store adds per-story usage storage keyed by project_id and story_id with tokens_main and tokens_subagents integer counters. AddUsage performs an atomic additive upsert. core AddUsage holds the exclusive per-project lock, rejects unknown stories and negative values before mutation, and records one event on success. cmd/trellis parses usage add <project-id> <story-id> --main N --subagents N with both flags required and strict base-10 nonnegative integers; no MCP handler or schema is added.
               approved_content_hash: fb284b8b7af8647aae6c8e3333f80658b6774382453680c1f49d9fb03b138d93
-              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              approved_parent_hash: 896d6fcda4ed34ebdf235a32547aab22af117820beb82c96a0e438f8b644fd4c
               children:
                 - id: UT-38
                   kind: unit_test
@@ -2698,16 +2704,16 @@ stories:
             - id: DD-39
               kind: detail_design
               title: Optional usage projection and compact formatting
-              body: Overview story summaries carry optional tokens_main and tokens_subagents only after the first report. A shared formatter computes total = main + subagents and renders each displayed count raw below 1000 or floor(count/1000)k at and above 1000, producing forms such as 210k (90k sub). Kanban story cards consume that projection and formatter in static and served rendering; successful usage events drive existing SSE reload. No currency or cost fields are introduced.
-              approved_content_hash: eb01b99d2ba4d72bbfb43722cb2b86d9beb67c5f98ce87b7350428414278797c
-              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              body: Overview story summaries for uncategorized token usage carry optional tokens_main and tokens_subagents only after the first report. A shared formatter computes total = main + subagents and renders each displayed count raw below 1000 or floor(count/1000)k at and above 1000, producing forms such as 210k (90k sub). Kanban story cards consume that projection and formatter in static and served rendering; successful usage events drive existing SSE reload. Categorized token usage added by US-39 extends the projection and formatter while preserving this rendering when no categorized token usage exists. No currency or cost fields are introduced.
+              approved_content_hash: 2a18242ebcf85f632b593e4cd594beaa9369470c91503fb9a9fe84291613f0ae
+              approved_parent_hash: 896d6fcda4ed34ebdf235a32547aab22af117820beb82c96a0e438f8b644fd4c
               children:
                 - id: UT-39
                   kind: unit_test
                   title: Usage formatting and rendering unit tests
                   body: Unit-test formatter boundaries 0, 999, 1000, 1999 and independent total/subagent formatting; overview omission before any report; exact optional counters after reports; board omission and compact card text with escaping unchanged.
                   approved_content_hash: 6594f69e7a41538d13de3ff9eff935f612e23d1f0a9ca4701e7b46b60abbadb6
-                  approved_parent_hash: eb01b99d2ba4d72bbfb43722cb2b86d9beb67c5f98ce87b7350428414278797c
+                  approved_parent_hash: 2a18242ebcf85f632b593e4cd594beaa9369470c91503fb9a9fe84291613f0ae
                   evidence:
                     tests:
                         - trellis/internal/board::TestUsageRendering_UT_39
@@ -2718,7 +2724,7 @@ stories:
               title: Usage reporting integration
               body: 'Engine plus file-backed store plus overview and board: add reports from repeated and concurrent engine instances, reopen the store, verify exact accumulated counters, verify compact overview and board output, and verify event-sequence growth for live-board refresh.'
               approved_content_hash: 3ff215c9effc65c0c77d83c24334dda86362e402045ea5e03e5078b63b7f9db3
-              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              approved_parent_hash: 896d6fcda4ed34ebdf235a32547aab22af117820beb82c96a0e438f8b644fd4c
               evidence:
                 tests:
                     - trellis/internal/board::TestUsageReportingIntegration_IT_37
@@ -2819,3 +2825,196 @@ stories:
                 - trellis/cmd/trellis::TestUnclaimedFilesBlockAuditAcceptance_AT_42
                 - trellis/internal/mcpserver::TestUnclaimedFilesMCPAcceptance_AT_42
             recorded_at: "2026-09-01T14:26:49Z"
+    - id: US-39
+      kind: story
+      title: Categorized token usage
+      body: As the process owner I want categorized token usage accumulated for each story and separately for main-agent and subagents, so cache reads stay distinguishable from output while uncategorized token usage remains unchanged.
+      status: done
+      paths:
+        - cmd/trellis/main.go
+        - cmd/trellis/usage.go
+        - cmd/trellis/usage_test.go
+        - internal/board/usage_test.go
+        - internal/core/fresh.go
+        - internal/core/usage.go
+        - internal/core/usage_test.go
+        - internal/store/store.go
+        - internal/store/usage.go
+        - internal/store/usage_test.go
+      acceptance_criteria:
+        - id: US-39.AC-1
+          given: a story with existing token usage
+          when: categorized usage is reported for main-agent or subagents
+          then: input, output, cache_read, and cache_write are atomically added per agent group, persist across processes and sessions, never replace prior values, and remain separate from uncategorized totals
+        - id: US-39.AC-2
+          given: the existing trellis usage add <project-id> <story-id> command
+          when: it receives --main-input, --main-output, --main-cache-read, --main-cache-write, --subagents-input, --subagents-output, --subagents-cache-read, or --subagents-cache-write
+          then: nonnegative integers accumulate in their categories, omitted categories count as zero, and at least one categorized flag is required
+        - id: US-39.AC-3
+          given: uncategorized token usage through --main N --subagents N or existing uncategorized token usage data
+          when: token usage is written or read
+          then: the uncategorized token usage form adds only main-agent and subagent totals, categorized token usage and uncategorized token usage flags cannot be mixed, invalid values change nothing, and existing US-37, US-38, and US-14 through US-17 values are neither migrated nor reinterpreted
+        - id: US-39.AC-4
+          given: a story with categorized token usage
+          when: get_overview returns the story
+          then: the existing total and subagent share remain the base and gain compact output and cache read/write totals; total includes categorized token usage plus uncategorized token usage, existing compact flooring remains, and a story with only uncategorized token usage keeps the previous form unchanged
+        - id: US-39.AC-5
+          given: a rendered static or live board
+          when: a story has categorized token usage
+          then: the story header shows the same compact usage as get_overview, cache_read and cache_write remain distinguishable, existing SSE refresh reveals new reports, and no cost, currency, or euro conversion appears
+      approved_content_hash: 93fff612c36e5092f759f9777d43c302417275265ecb434285a9f148b76003da
+      children:
+        - id: AS-39
+          kind: arch
+          title: Dual-mode categorized token usage accounting
+          body: 'Extend per-story token usage with categorized token usage counters for input, output, cache_read, and cache_write for main-agent and subagents while retaining separate main-agent and subagent counters for uncategorized token usage. One guarded engine mutation selects either categorized or uncategorized mode and uses an atomic additive store update. Existing usage add remains CLI-only. get_overview and board share one compact formatter: total and subagent share include every counter, categorized token usage reports add output plus cache read/write detail, and stories containing only uncategorized token usage retain their previous rendering. No cost or currency conversion exists.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-3
+              pinned_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
+          approved_content_hash: aba66da4fac039960af02b68b4dad0e2e54e5df4497373072d819de91dde33ee
+          approved_parent_hash: 93fff612c36e5092f759f9777d43c302417275265ecb434285a9f148b76003da
+          children:
+            - id: DD-41
+              kind: detail_design
+              title: Categorized persistence and dual-mode CLI
+              body: 'Store usage keeps tokens_main and tokens_subagents as counters for uncategorized token usage and adds eight categorized token usage counters: input, output, cache_read, and cache_write for main-agent and subagents. AddUsage performs one atomic additive upsert. Core validates existing story and nonnegative integers before mutation. CLI accepts either uncategorized token usage through --main plus --subagents with both required, or categorized token usage through --main-input, --main-output, --main-cache-read, --main-cache-write, --subagents-input, --subagents-output, --subagents-cache-read, and --subagents-cache-write with omitted values zero and at least one flag present; mixing modes fails without mutation. No migration rewrites existing rows.'
+              approved_content_hash: 9e0ae6be37203a210faf7f4d095a43aa8edf422787ae633103e25e95733154c9
+              approved_parent_hash: aba66da4fac039960af02b68b4dad0e2e54e5df4497373072d819de91dde33ee
+              children:
+                - id: UT-41
+                  kind: unit_test
+                  title: Categorized usage persistence and CLI unit tests
+                  body: Unit-test additive upsert across repeated calls, reopened stores, and concurrent writers for all eight categorized token usage counters plus both uncategorized token usage counters; zero and omitted categorized values; rejection of mixed modes, no flags, unknown story, negative values, and non-integer CLI values; and unchanged counters after every rejection.
+                  approved_content_hash: cddaea2d5405a455d46a9e54468276b4df1bc7946e4ada300fa0a62b69f8ea64
+                  approved_parent_hash: 9e0ae6be37203a210faf7f4d095a43aa8edf422787ae633103e25e95733154c9
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestCategorizedUsageFlagValidation_UT_41
+                        - trellis/internal/store::TestCategorizedUsagePersistence_UT_41
+                    recorded_at: "2026-09-01T19:28:02Z"
+            - id: DD-42
+              kind: detail_design
+              title: Categorized overview and board formatting
+              body: Overview usage projection carries counters for uncategorized token usage plus categorized token usage counters only after persisted reports. Shared formatter computes total and subagent share across uncategorized token usage and categorized token usage. Categorized token usage appends compact output and cache read/write totals using existing raw-below-1000 and floor-to-k rules; data containing only uncategorized token usage follows the exact prior form. Kanban story cards and story headers consume the same formatter in static and served rendering; successful usage events drive existing SSE reload. No cost, currency, or euro fields or text are introduced.
+              approved_content_hash: 2c0e288ea05d6b52ec3f2c0ca3ceddcd1909beb0a80ab7d59ca740963b7d5c49
+              approved_parent_hash: aba66da4fac039960af02b68b4dad0e2e54e5df4497373072d819de91dde33ee
+              children:
+                - id: UT-42
+                  kind: unit_test
+                  title: Categorized usage formatting unit tests
+                  body: Unit-test total, subagent, output, cache_read, and cache_write aggregation and compact formatter boundaries 0, 999, 1000, and 1999; exact rendering for only uncategorized token usage; categorized token usage suffix rendering; overview omission before reports; and matching escaped static and served board output without cost or currency text.
+                  approved_content_hash: 8f5a0040db413894977934458414529ef37f310de790ac8db2e37faf995ae284
+                  approved_parent_hash: 2c0e288ea05d6b52ec3f2c0ca3ceddcd1909beb0a80ab7d59ca740963b7d5c49
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestCategorizedUsageBoardFormatting_UT_42
+                        - trellis/internal/core::TestCategorizedUsageFormatting_UT_42
+                    recorded_at: "2026-09-01T19:28:02Z"
+            - id: IT-39
+              kind: integration_test
+              title: Categorized usage integration
+              body: 'Engine plus file-backed store plus CLI projection and board: add uncategorized token usage and categorized token usage reports from repeated and concurrent engine instances, reopen the store, verify exact separate counters and combined totals, verify compact overview and static/live board output, verify rendering for only uncategorized token usage remains unchanged, and verify event-sequence growth for SSE refresh.'
+              approved_content_hash: 099fa44e5f566b5d35f4094f18c5917f693a0093807450e4fac399bda734b69f
+              approved_parent_hash: aba66da4fac039960af02b68b4dad0e2e54e5df4497373072d819de91dde33ee
+              evidence:
+                tests:
+                    - trellis/internal/board::TestCategorizedUsageIntegration_IT_39
+                recorded_at: "2026-09-01T19:28:02Z"
+        - id: AT-43
+          kind: acceptance_test
+          title: Categorized token usage acceptance
+          body: 'Drive the real trellis CLI against a persisted project: add complete and partial categorized token usage reports for main-agent and subagents, add uncategorized token usage reports, restart between reports, and assert exact persisted counters plus get_overview and static/served board text. Exercise mixed modes, absent categorized flags, unknown story, negative and non-integer values, asserting precise errors and unchanged usage. Seed uncategorized token usage values representing US-37, US-38, and US-14 through US-17 behavior and assert no migration or reinterpretation. Assert output and cache read/write detail appears only with categorized token usage, existing compact flooring remains, SSE refresh observes reports, and all cost, currency, and euro text remains absent.'
+          covers:
+            - US-39.AC-1
+            - US-39.AC-2
+            - US-39.AC-3
+            - US-39.AC-4
+            - US-39.AC-5
+          approved_content_hash: 7c86a7f695bd33931a8aa58bed9050c9ffdb174017f343922cd41279746884b8
+          approved_parent_hash: 93fff612c36e5092f759f9777d43c302417275265ecb434285a9f148b76003da
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestCategorizedUsageCLIAcceptance_AT_43
+            recorded_at: "2026-09-01T19:28:02Z"
+    - id: US-40
+      kind: story
+      title: Exhaustive token usage overflow errors
+      body: As process owner I want exhaustive token usage overflow errors so every affected counter is diagnosable and rejected token usage reports remain atomic.
+      status: done
+      paths:
+        - cmd/trellis/usage_test.go
+        - internal/core/usage_test.go
+        - internal/store/usage.go
+        - internal/store/usage_test.go
+      acceptance_criteria:
+        - id: US-40.AC-1
+          given: an existing story with one or more token usage counters near MaxInt64
+          when: uncategorized token usage or categorized token usage would overflow one or more counters
+          then: the command fails with a deterministic error naming the story ID and every affected counter, without omitted or unrelated counter names
+        - id: US-40.AC-2
+          given: overflow affects one or more token usage counters
+          when: the token usage report is rejected
+          then: all ten token usage counters remain unchanged and no success event is appended
+        - id: US-40.AC-3
+          given: token usage additions keep every counter at or below MaxInt64
+          when: token usage is reported
+          then: the report succeeds and existing atomic accumulation behavior remains unchanged, including the exact MaxInt64 boundary
+      approved_content_hash: 7f09faaf27bf65676d804f6546489c8999f62314898ca9a1fe750a3383f9d0c3
+      children:
+        - id: AS-40
+          kind: arch
+          title: Atomic exhaustive overflow diagnosis
+          body: Keep the guarded atomic additive upsert for uncategorized token usage and categorized token usage. When the upsert changes no row because one or more additions exceed MaxInt64, inspect current persisted counters, compare every incoming addition without overflowing arithmetic, and return one deterministic error containing the story ID and all affected counter names in schema order. Rejected reports mutate no counter and append no success event; valid additions through the exact MaxInt64 boundary retain existing behavior.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-3
+              pinned_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
+          approved_content_hash: 02cdad39a13b2c4c5594ee76ca83eba3839dd0c3657407ec0717b31fe4a0aa8f
+          approved_parent_hash: 7f09faaf27bf65676d804f6546489c8999f62314898ca9a1fe750a3383f9d0c3
+          children:
+            - id: DD-43
+              kind: detail_design
+              title: Deterministic overflow counter enumeration
+              body: After a guarded additive upsert reports zero changed rows, read current StoryUsage and test each of tokens_main, tokens_subagents, tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_main_cache_write, tokens_subagents_input, tokens_subagents_output, tokens_subagents_cache_read, and tokens_subagents_cache_write against MaxInt64 minus its requested addition. Collect every violated name in that fixed order and include the list with the story ID in the returned error. Counter reads and comparisons never add signed integers. Existing engine error propagation prevents success events after rejection.
+              approved_content_hash: 2fadc5b05259d69e13a5cc970483a1226026760a23601fb237e08f991d08dfdf
+              approved_parent_hash: 02cdad39a13b2c4c5594ee76ca83eba3839dd0c3657407ec0717b31fe4a0aa8f
+              children:
+                - id: UT-43
+                  kind: unit_test
+                  title: Overflow enumeration unit tests
+                  body: Unit-test single-counter and simultaneous multi-counter overflow for uncategorized token usage and categorized token usage; exact deterministic affected-counter names and order; absence of unrelated names; unchanged values for all ten counters after rejection; and successful accumulation at the exact MaxInt64 boundary.
+                  approved_content_hash: 9a61afa6c01c515a58960355add7df02735812ea663d246fb7ba8aa98084f223
+                  approved_parent_hash: 2fadc5b05259d69e13a5cc970483a1226026760a23601fb237e08f991d08dfdf
+                  evidence:
+                    tests:
+                        - trellis/internal/store::TestOverflowEnumeration_UT_43
+                    recorded_at: "2026-09-01T19:53:24Z"
+            - id: IT-40
+              kind: integration_test
+              title: Overflow rejection integration
+              body: 'Engine plus file-backed store: seed uncategorized token usage and categorized token usage near MaxInt64, trigger simultaneous counter overflows, verify exhaustive deterministic errors, reopen the store to verify all ten counters unchanged, and verify event sequence does not grow after rejection while exact-boundary reports succeed.'
+              approved_content_hash: df8246d84456356ed4bedd11a50556372cb4e861c80eedf45d244ee290d889fe
+              approved_parent_hash: 02cdad39a13b2c4c5594ee76ca83eba3839dd0c3657407ec0717b31fe4a0aa8f
+              evidence:
+                tests:
+                    - trellis/internal/core::TestOverflowRejectionIntegration_IT_40
+                recorded_at: "2026-09-01T19:53:24Z"
+        - id: AT-44
+          kind: acceptance_test
+          title: Exhaustive overflow error acceptance
+          body: 'Drive the real trellis CLI against a persisted project: seed uncategorized token usage and categorized token usage near MaxInt64, trigger single and simultaneous multi-counter overflows, assert exact deterministic errors name the story ID and every affected counter in schema order without unrelated names, restart and assert all ten counters remain unchanged, assert no success event was appended, and verify additions reaching exactly MaxInt64 succeed.'
+          covers:
+            - US-40.AC-1
+            - US-40.AC-2
+            - US-40.AC-3
+          approved_content_hash: db81756ea8577876ca6f71d438725aa9e63ecbfae169cbee9f56f79c448f4fa4
+          approved_parent_hash: 7f09faaf27bf65676d804f6546489c8999f62314898ca9a1fe750a3383f9d0c3
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestExhaustiveOverflowErrorAcceptance_AT_44
+            recorded_at: "2026-09-01T19:53:24Z"
