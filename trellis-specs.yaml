@@ -34,14 +34,16 @@ glossary:
       definition: 'Unit of work: a spec tree plus the gated lifecycle todo -> refined -> in_progress -> done.'
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
+    - term: token usage
+      definition: Persisted per-story counts for main-agent and subagent tokens.
 counters:
-    AS: 36
-    AT: 40
+    AS: 37
+    AT: 41
     CC: 4
-    DD: 37
-    IT: 36
-    US: 36
-    UT: 37
+    DD: 39
+    IT: 37
+    US: 37
+    UT: 39
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -78,6 +80,7 @@ counters:
     ac:US-34: 3
     ac:US-35: 3
     ac:US-36: 2
+    ac:US-37: 5
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -2558,3 +2561,122 @@ stories:
             tests:
                 - trellis/internal/core::TestCoverageDeltaAcceptance_AT_40
             recorded_at: "2026-08-30T20:03:52Z"
+    - id: US-37
+      kind: story
+      title: Token usage per story
+      body: As the process owner I want token usage accumulated per story so extension reports remain deterministic across sessions and trellis can show story-level main-agent and subagent totals without estimating cost.
+      status: done
+      paths:
+        - README.md
+        - cmd/trellis/main.go
+        - cmd/trellis/usage.go
+        - cmd/trellis/usage_test.go
+        - internal/board/board.go
+        - internal/board/usage_test.go
+        - internal/core/fresh.go
+        - internal/core/usage.go
+        - internal/core/usage_test.go
+        - internal/mcpserver/usage_test.go
+        - internal/store/store.go
+        - internal/store/usage.go
+        - internal/store/usage_test.go
+      acceptance_criteria:
+        - id: US-37.AC-1
+          given: an existing story with previous tokens_main and tokens_subagents
+          when: trellis usage add <project-id> <story-id> --main M --subagents S runs one or more times
+          then: trellis atomically adds both nonnegative integers; totals persist across processes and sessions, zero is accepted, and no report replaces or resets previous token usage
+        - id: US-37.AC-2
+          given: an unknown story or a negative, missing, or non-integer token value
+          when: trellis usage add runs
+          then: the command returns a precise error and changes no token usage
+        - id: US-37.AC-3
+          given: the trellis CLI and MCP tool surface
+          when: token usage is reported or MCP tools are listed
+          then: the mutation exists only as a CLI command and no MCP tool can write token usage
+        - id: US-37.AC-4
+          given: a story with persisted token usage
+          when: get_overview returns the story
+          then: it shows the main-agent plus subagent total and the subagent share compactly, flooring values of at least 1000 to whole k and showing smaller values raw; stories without reports show no usage and no cost or currency conversion appears
+        - id: US-37.AC-5
+          given: a rendered static or live board
+          when: a story has persisted token usage
+          then: the story shows the same compact total as get_overview; stories without reports show nothing, and SSE refresh makes new reports visible
+      approved_content_hash: c8641b954410b45c876e303a440cdeec7f3db34d0013499cb7d8d4dd030e2af7
+      children:
+        - id: AS-37
+          kind: arch
+          title: Atomic CLI-only token usage accounting
+          body: 'Token usage is persisted by story as separate main-agent and subagent counters. A guarded engine mutation validates the existing story and nonnegative integer inputs, then uses one atomic database upsert to increment both counters without lost updates. The CLI exposes usage add; MCP deliberately exposes no write tool because extension code, not an agent, reports usage. Successful reports append an event. get_overview carries optional usage, and the board renders the same shared compact formatter: values below 1000 raw, otherwise floor(value/1000)k. No cost conversion exists.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-3
+              pinned_hash: 73ad83583b38b453fce0cd7a9c84ea300e5f84cd014b107d01b14ce9286cffb9
+          approved_content_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+          approved_parent_hash: c8641b954410b45c876e303a440cdeec7f3db34d0013499cb7d8d4dd030e2af7
+          children:
+            - id: DD-38
+              kind: detail_design
+              title: Usage persistence and CLI command
+              body: store adds per-story usage storage keyed by project_id and story_id with tokens_main and tokens_subagents integer counters. AddUsage performs an atomic additive upsert. core AddUsage holds the exclusive per-project lock, rejects unknown stories and negative values before mutation, and records one event on success. cmd/trellis parses usage add <project-id> <story-id> --main N --subagents N with both flags required and strict base-10 nonnegative integers; no MCP handler or schema is added.
+              approved_content_hash: fb284b8b7af8647aae6c8e3333f80658b6774382453680c1f49d9fb03b138d93
+              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              children:
+                - id: UT-38
+                  kind: unit_test
+                  title: Usage accumulation unit tests
+                  body: Unit-test additive upsert across repeated calls and reopened stores, zero values, unknown story, missing/negative/non-integer CLI values, unchanged counters after every rejection, and concurrent additions without lost updates.
+                  approved_content_hash: 82a8c4b0acc53889505e0caf1d6905d8f5ddb682227f6ba5e6d3243c7941a94b
+                  approved_parent_hash: fb284b8b7af8647aae6c8e3333f80658b6774382453680c1f49d9fb03b138d93
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestUsageValidation_UT_38
+                        - trellis/internal/store::TestUsageAccumulation_UT_38
+                    recorded_at: "2026-09-01T12:38:56Z"
+            - id: DD-39
+              kind: detail_design
+              title: Optional usage projection and compact formatting
+              body: Overview story summaries carry optional tokens_main and tokens_subagents only after the first report. A shared formatter computes total = main + subagents and renders each displayed count raw below 1000 or floor(count/1000)k at and above 1000, producing forms such as 210k (90k sub). Kanban story cards consume that projection and formatter in static and served rendering; successful usage events drive existing SSE reload. No currency or cost fields are introduced.
+              approved_content_hash: eb01b99d2ba4d72bbfb43722cb2b86d9beb67c5f98ce87b7350428414278797c
+              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              children:
+                - id: UT-39
+                  kind: unit_test
+                  title: Usage formatting and rendering unit tests
+                  body: Unit-test formatter boundaries 0, 999, 1000, 1999 and independent total/subagent formatting; overview omission before any report; exact optional counters after reports; board omission and compact card text with escaping unchanged.
+                  approved_content_hash: 6594f69e7a41538d13de3ff9eff935f612e23d1f0a9ca4701e7b46b60abbadb6
+                  approved_parent_hash: eb01b99d2ba4d72bbfb43722cb2b86d9beb67c5f98ce87b7350428414278797c
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestUsageRendering_UT_39
+                        - trellis/internal/core::TestUsageOverview_UT_39
+                    recorded_at: "2026-09-01T12:38:56Z"
+            - id: IT-37
+              kind: integration_test
+              title: Usage reporting integration
+              body: 'Engine plus file-backed store plus overview and board: add reports from repeated and concurrent engine instances, reopen the store, verify exact accumulated counters, verify compact overview and board output, and verify event-sequence growth for live-board refresh.'
+              approved_content_hash: 3ff215c9effc65c0c77d83c24334dda86362e402045ea5e03e5078b63b7f9db3
+              approved_parent_hash: 1034235e430c76408e3d3966e6dce77e5942fa958831de0803dda640568b3612
+              evidence:
+                tests:
+                    - trellis/internal/board::TestUsageReportingIntegration_IT_37
+                recorded_at: "2026-09-01T12:38:56Z"
+        - id: AT-41
+          kind: acceptance_test
+          title: Token usage CLI acceptance
+          body: 'Drive the real trellis CLI against a persisted project: add several main-agent and subagent reports including zero, restart between reports, and assert accumulated get_overview plus static and served board text with floor-to-k boundaries. Exercise unknown story and missing, negative, and non-integer values, asserting nonzero precise errors and unchanged totals. Inspect MCP tools/list and assert no usage mutation tool exists; assert stories without reports and all cost or currency text remain absent.'
+          covers:
+            - US-37.AC-1
+            - US-37.AC-2
+            - US-37.AC-3
+            - US-37.AC-4
+            - US-37.AC-5
+          approved_content_hash: 8966c9cc37123262ee6e02612ceca47d7411f988fa91f6f0eac4320146245dd5
+          approved_parent_hash: c8641b954410b45c876e303a440cdeec7f3db34d0013499cb7d8d4dd030e2af7
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestTokenUsageCLIAcceptance_AT_41
+                - trellis/internal/mcpserver::TestTokenUsageHasNoMCPMutation_AT_41
+            recorded_at: "2026-09-01T12:38:56Z"
