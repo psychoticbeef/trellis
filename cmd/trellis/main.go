@@ -8,14 +8,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -265,6 +268,14 @@ func orEmpty(s string) string {
 	return s
 }
 
+func reportBoardListenError(w io.Writer, addr string, err error) {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		fmt.Fprintf(w, "trellis: board address %s in use, serving MCP only\n", addr)
+		return
+	}
+	fmt.Fprintf(w, "trellis: board UI disabled (%v)\n", err)
+}
+
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	project := fs.String("project", "", "project id (required)")
@@ -282,7 +293,7 @@ func cmdServe(args []string) error {
 	// protocol channel. A bind failure must never block the agent connection.
 	if *boardAddr != "off" {
 		if ln, err := net.Listen("tcp", *boardAddr); err != nil {
-			fmt.Fprintf(os.Stderr, "trellis: board UI disabled (%v)\n", err)
+			reportBoardListenError(os.Stderr, *boardAddr, err)
 		} else {
 			fmt.Fprintf(os.Stderr, "trellis: boards at http://%s\n", ln.Addr())
 			go http.Serve(ln, board.MultiHandler(st))
