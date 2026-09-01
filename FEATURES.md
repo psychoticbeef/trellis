@@ -44,6 +44,7 @@
 - **US-39** — Categorized token usage
 - **US-40** — Exhaustive token usage overflow errors
 - **US-41** — Separate board overview and story detail
+- **US-42** — Board and serve polish
 
 ## Glossary
 

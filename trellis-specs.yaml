@@ -45,13 +45,13 @@ glossary:
     - term: uncategorized token usage
       definition: Token usage stored only as main-agent and subagent totals.
 counters:
-    AS: 41
-    AT: 45
+    AS: 42
+    AT: 46
     CC: 4
-    DD: 44
-    IT: 41
-    US: 41
-    UT: 44
+    DD: 45
+    IT: 42
+    US: 42
+    UT: 45
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -93,6 +93,7 @@ counters:
     ac:US-39: 5
     ac:US-40: 3
     ac:US-41: 5
+    ac:US-42: 3
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -3120,3 +3121,86 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestBoardStoryDetailAcceptance_AT_45
             recorded_at: "2026-09-01T20:57:02Z"
+    - id: US-42
+      kind: story
+      title: Board and serve polish
+      body: As a human I want board presentation and serve degradation polished, so design philosophy stays in specs, categorized token usage remains readable with exact values available, and an occupied board address produces a clear stderr warning while MCP operation continues.
+      status: done
+      paths:
+        - internal/board/board.go
+        - internal/board/polish_test.go
+        - cmd/trellis/main.go
+        - cmd/trellis/polish_test.go
+      acceptance_criteria:
+        - id: US-42.AC-1
+          given: a rendered static or live board
+          when: the human opens the board overview or story detail overlay
+          then: 'the text `observability, not a gate: closing a gap stays a judgment call` appears nowhere in the board UI'
+        - id: US-42.AC-2
+          given: a story detail overlay with categorized token usage
+          when: token categories for main-agent or subagents are displayed
+          then: values below 1000 appear exactly, values from 1000 appear as rounded whole k, and values from 1,000,000 appear as M with one decimal place; examples are 999, 1k, 111k, 1.1M, and 16.4M; every formatted element carries the exact raw value in its title attribute; all input, output, cache_read, and cache_write values use the same formatting
+        - id: US-42.AC-3
+          given: the configured board address is already in use
+          when: trellis serve starts
+          then: stderr contains `board address <address> in use, serving MCP only`; stdout remains reserved for the MCP protocol; MCP operation starts and continues normally without the board
+      approved_content_hash: 477f276724498d797f4b1d2ab8ee5e31b07f0aa57eeb816a8b5b5d1c7c6e9147
+      children:
+        - id: AS-42
+          kind: arch
+          title: Shared board value presentation and non-fatal board binding
+          body: 'Keep static export, single-project live board, and multi-project MCP board rendering on the existing shared Render path. Remove design-philosophy commentary from rendered UI while retaining behavior in specs. Add one HTML-safe formatter for story detail overlay categorized token usage: exact values below 1000, rounded whole k from 1000, and one-decimal M from 1,000,000, with the exact integer exposed through a title attribute. All main-agent and subagent input, output, cache_read, and cache_write fields use this formatter. trellis serve treats board listener address-in-use failure as a board-only degradation: emit a deterministic stderr warning, write nothing outside MCP protocol to stdout, and continue the MCP stdio loop unchanged.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-4
+              pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+          approved_content_hash: a40e228ac17d269177ed4382fe9ab5f1e22e205a51e4528724f65e844f03c18c
+          approved_parent_hash: 477f276724498d797f4b1d2ab8ee5e31b07f0aa57eeb816a8b5b5d1c7c6e9147
+          children:
+            - id: DD-45
+              kind: detail_design
+              title: Board token formatting and serve bind diagnostics
+              body: internal/board removes the observability meta line and renders every categorized token usage value in the story detail overlay through a shared formatter returning display text plus exact decimal title text. Boundary behavior is raw through 999, rounded whole k from 1000 through 999999, then rounded one-decimal M. Template output applies title to each input, output, cache_read, and cache_write value for main-agent and subagents. cmd/trellis serve distinguishes an address-in-use listen error, writes `board address <address> in use, serving MCP only` to stderr, and continues srv.Run; stdout remains MCP-only.
+              approved_content_hash: 3debe0d4487f6fe03a59d975ab78eab9c7b3f34f62fc8725c577c68311d0fbe7
+              approved_parent_hash: a40e228ac17d269177ed4382fe9ab5f1e22e205a51e4528724f65e844f03c18c
+              children:
+                - id: UT-45
+                  kind: unit_test
+                  title: Board formatting and bind warning unit tests
+                  body: Unit-test absence of the observability meta line; formatter boundaries and rounding for 999, 1000, 111000, 1113014, and 16400000; exact title attributes across every input, output, cache_read, and cache_write value for main-agent and subagents; HTML escaping; and address-in-use warning text on stderr with no warning on stdout while MCP startup continues.
+                  approved_content_hash: eba41710e3ceaee8d3c227b6f7214e4d02ab0d8cbecd0c6086a160f6abdd75d7
+                  approved_parent_hash: 3debe0d4487f6fe03a59d975ab78eab9c7b3f34f62fc8725c577c68311d0fbe7
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestBoardBindWarning_UT_45
+                        - trellis/internal/board::TestBoardFormattingAndMeta_UT_45
+                    recorded_at: "2026-09-01T21:58:27Z"
+            - id: IT-42
+              kind: integration_test
+              title: Static, live, and MCP-only degradation integration
+              body: Render categorized token usage through static export, single-project live board, and multi-project MCP board paths and assert identical human-readable category values, exact title attributes, and absent observability commentary. Start trellis serve with an occupied board address and verify deterministic stderr warning, MCP-clean stdout, and working MCP requests after board bind degradation.
+              approved_content_hash: 6ddbece97d873aa3fdaf80f7380eb76118d015f4eef1f3898927646732c0b82a
+              approved_parent_hash: a40e228ac17d269177ed4382fe9ab5f1e22e205a51e4528724f65e844f03c18c
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestServeBindDegradation_IT_42
+                    - trellis/internal/board::TestStaticLiveAndMultiBoardPolish_IT_42/static
+                    - trellis/internal/board::TestStaticLiveAndMultiBoardPolish_IT_42/single
+                    - trellis/internal/board::TestStaticLiveAndMultiBoardPolish_IT_42/multi
+                    - trellis/internal/board::TestStaticLiveAndMultiBoardPolish_IT_42
+                recorded_at: "2026-09-01T21:58:27Z"
+        - id: AT-46
+          kind: acceptance_test
+          title: Board and serve polish acceptance
+          body: Drive real board static export and live rendering with categorized token usage at raw, k, and M boundaries. Parse HTML and assert observability commentary is absent, every displayed categorized token usage value for main-agent and subagents uses required formatting, and every formatted value exposes its exact integer through title. Drive real trellis serve with its board address occupied; assert exact stderr warning, uncontaminated MCP stdout, and successful MCP operation without a board listener.
+          covers:
+            - US-42.AC-1
+            - US-42.AC-2
+            - US-42.AC-3
+          approved_content_hash: 5296dcf54b53f711991813eae71266c03c87aaf1a09e781609b56afcaabeb1e8
+          approved_parent_hash: 477f276724498d797f4b1d2ab8ee5e31b07f0aa57eeb816a8b5b5d1c7c6e9147
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestBoardAndServePolishAcceptance_AT_46
+            recorded_at: "2026-09-01T21:58:27Z"
