@@ -3,11 +3,13 @@ package core_test
 import (
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"trellis/internal/core"
 	"trellis/internal/model"
+	"trellis/internal/store"
 )
 
 // TestUsageValidation_UT_38 proves UT-38: core rejects every invalid report
@@ -48,12 +50,33 @@ func TestUsageValidation_UT_38(t *testing.T) {
 // TestOverflowRejectionIntegration_IT_40 proves IT-40: engine propagation keeps
 // categorized counters and event sequence unchanged after exhaustive rejection.
 func TestOverflowRejectionIntegration_IT_40(t *testing.T) {
-	e, st := newEngineStore(t)
-	story := mustCreate(t, e, model.KindStory, "", "overflow story", nil)
-	maxMain := core.TokenCategories{Input: math.MaxInt64, CacheRead: math.MaxInt64}
-	maxSubagents := core.TokenCategories{Output: math.MaxInt64}
-	if err := e.AddCategorizedUsage(story.ID, maxMain, maxSubagents); err != nil {
+	path := filepath.Join(t.TempDir(), "trellis.db")
+	st, err := store.Open(path)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "test", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story := mustCreate(t, e, model.KindStory, "", "overflow story", nil)
+	allCategories := func(value int64) core.TokenCategories {
+		return core.TokenCategories{Input: value, Output: value, CacheRead: value, CacheWrite: value}
+	}
+	if err := e.AddUsage(story.ID, math.MaxInt64-1, math.MaxInt64-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddCategorizedUsage(story.ID, allCategories(math.MaxInt64-1), allCategories(math.MaxInt64-1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddUsage(story.ID, 1, 1); err != nil {
+		t.Fatalf("uncategorized exact-boundary update: %v", err)
+	}
+	if err := e.AddCategorizedUsage(story.ID, allCategories(1), allCategories(1)); err != nil {
+		t.Fatalf("categorized exact-boundary update: %v", err)
 	}
 	before, ok, err := st.GetStoryUsage("p1", story.ID)
 	if err != nil || !ok {
@@ -63,16 +86,27 @@ func TestOverflowRejectionIntegration_IT_40(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = e.AddCategorizedUsage(story.ID,
-		core.TokenCategories{Input: 1, Output: 9, CacheRead: 2},
-		core.TokenCategories{Output: 3})
-	want := "token usage overflow for story " + story.ID + ": tokens_main_input, tokens_main_cache_read, tokens_subagents_output"
-	if err == nil || err.Error() != want {
-		t.Fatalf("overflow error = %v, want %q", err, want)
+	uncategorizedErr := e.AddUsage(story.ID, 1, 1)
+	uncategorizedWant := "token usage overflow for story " + story.ID + ": tokens_main, tokens_subagents"
+	if uncategorizedErr == nil || uncategorizedErr.Error() != uncategorizedWant {
+		t.Fatalf("uncategorized overflow error = %v, want %q", uncategorizedErr, uncategorizedWant)
 	}
+	categorizedErr := e.AddCategorizedUsage(story.ID, allCategories(1), allCategories(1))
+	categorizedWant := "token usage overflow for story " + story.ID + ": tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_main_cache_write, tokens_subagents_input, tokens_subagents_output, tokens_subagents_cache_read, tokens_subagents_cache_write"
+	if categorizedErr == nil || categorizedErr.Error() != categorizedWant {
+		t.Fatalf("categorized overflow error = %v, want %q", categorizedErr, categorizedWant)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
 	after, ok, err := st.GetStoryUsage("p1", story.ID)
 	if err != nil || !ok || after != before {
-		t.Fatalf("overflow changed usage: before=%+v after=%+v ok=%v err=%v", before, after, ok, err)
+		t.Fatalf("reopened overflow usage: before=%+v after=%+v ok=%v err=%v", before, after, ok, err)
 	}
 	seqAfter, err := st.MaxEventSeq("p1")
 	if err != nil || seqAfter != seqBefore {

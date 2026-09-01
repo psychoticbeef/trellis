@@ -36,6 +36,12 @@ func (s *Store) AddCategorizedStoryUsage(projectID, storyID string, main, subage
 }
 
 func (s *Store) addStoryUsage(projectID, storyID string, usage StoryUsage) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	categorized := int64(0)
 	if usage.Categorized {
 		categorized = 1
@@ -49,7 +55,7 @@ func (s *Store) addStoryUsage(projectID, storyID string, usage StoryUsage) error
 	for range 10 {
 		values = append(values, int64(math.MaxInt64))
 	}
-	result, err := s.db.Exec(`INSERT INTO story_usage (
+	result, err := tx.Exec(`INSERT INTO story_usage (
 			project_id, story_id, tokens_main, tokens_subagents,
 			tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_main_cache_write,
 			tokens_subagents_input, tokens_subagents_output, tokens_subagents_cache_read, tokens_subagents_cache_write,
@@ -83,7 +89,7 @@ func (s *Store) addStoryUsage(projectID, storyID string, usage StoryUsage) error
 	if changed, err := result.RowsAffected(); err != nil {
 		return err
 	} else if changed == 0 {
-		current, ok, err := s.GetStoryUsage(projectID, storyID)
+		current, ok, err := getStoryUsage(tx, projectID, storyID)
 		if err != nil {
 			return err
 		}
@@ -96,7 +102,7 @@ func (s *Store) addStoryUsage(projectID, storyID string, usage StoryUsage) error
 		}
 		return fmt.Errorf("token usage overflow for story %s: %s", storyID, strings.Join(affected, ", "))
 	}
-	return nil
+	return tx.Commit()
 }
 
 func overflowingUsageCounters(current, added StoryUsage) []string {
@@ -124,10 +130,18 @@ func overflowingUsageCounters(current, added StoryUsage) []string {
 	return affected
 }
 
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // GetStoryUsage returns ok=false when no usage was reported for the story.
 func (s *Store) GetStoryUsage(projectID, storyID string) (usage StoryUsage, ok bool, err error) {
+	return getStoryUsage(s.db, projectID, storyID)
+}
+
+func getStoryUsage(q rowQuerier, projectID, storyID string) (usage StoryUsage, ok bool, err error) {
 	var categorized int64
-	err = s.db.QueryRow(`SELECT tokens_main, tokens_subagents,
+	err = q.QueryRow(`SELECT tokens_main, tokens_subagents,
 			tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_main_cache_write,
 			tokens_subagents_input, tokens_subagents_output, tokens_subagents_cache_read, tokens_subagents_cache_write,
 			categorized

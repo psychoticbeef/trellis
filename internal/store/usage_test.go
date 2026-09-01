@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"math"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -110,6 +109,9 @@ func TestOverflowEnumeration_UT_43(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	allCategories := func(value int64) store.TokenCategories {
+		return store.TokenCategories{Input: value, Output: value, CacheRead: value, CacheWrite: value}
+	}
 
 	if err := st.AddStoryUsage("p1", "US-single", math.MaxInt64, 0); err != nil {
 		t.Fatal(err)
@@ -120,35 +122,62 @@ func TestOverflowEnumeration_UT_43(t *testing.T) {
 	}
 	err = st.AddStoryUsage("p1", "US-single", 1, 7)
 	if err == nil || err.Error() != "token usage overflow for story US-single: tokens_main" {
-		t.Fatalf("single overflow error = %v", err)
+		t.Fatalf("single uncategorized overflow error = %v", err)
 	}
 	afterSingle, _, err := st.GetStoryUsage("p1", "US-single")
 	if err != nil || afterSingle != beforeSingle {
 		t.Fatalf("single overflow changed usage: before=%+v after=%+v err=%v", beforeSingle, afterSingle, err)
 	}
 
-	maxMain := store.TokenCategories{Input: math.MaxInt64, CacheRead: math.MaxInt64}
-	maxSubagents := store.TokenCategories{Output: math.MaxInt64, CacheWrite: math.MaxInt64}
-	if err := st.AddCategorizedStoryUsage("p1", "US-multi", maxMain, maxSubagents); err != nil {
+	if err := st.AddCategorizedStoryUsage("p1", "US-single-category", store.TokenCategories{Output: math.MaxInt64}, store.TokenCategories{}); err != nil {
 		t.Fatal(err)
 	}
-	beforeMulti, _, err := st.GetStoryUsage("p1", "US-multi")
+	err = st.AddCategorizedStoryUsage("p1", "US-single-category", store.TokenCategories{Input: 9, Output: 1}, store.TokenCategories{})
+	if err == nil || err.Error() != "token usage overflow for story US-single-category: tokens_main_output" {
+		t.Fatalf("single categorized overflow error = %v", err)
+	}
+
+	if err := st.AddStoryUsage("p1", "US-all", math.MaxInt64, math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddCategorizedStoryUsage("p1", "US-all", allCategories(math.MaxInt64), allCategories(math.MaxInt64)); err != nil {
+		t.Fatal(err)
+	}
+	beforeAll, _, err := st.GetStoryUsage("p1", "US-all")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = st.AddCategorizedStoryUsage("p1", "US-multi",
-		store.TokenCategories{Input: 1, Output: 9, CacheRead: 2},
-		store.TokenCategories{Output: 3, CacheWrite: 4})
-	want := "token usage overflow for story US-multi: tokens_main_input, tokens_main_cache_read, tokens_subagents_output, tokens_subagents_cache_write"
-	if err == nil || err.Error() != want {
-		t.Fatalf("multi overflow error = %v, want %q", err, want)
+	err = st.AddStoryUsage("p1", "US-all", 1, 1)
+	wantUncategorized := "token usage overflow for story US-all: tokens_main, tokens_subagents"
+	if err == nil || err.Error() != wantUncategorized {
+		t.Fatalf("multi uncategorized overflow error = %v, want %q", err, wantUncategorized)
 	}
-	if strings.Contains(err.Error(), "tokens_main_output,") {
-		t.Fatalf("multi overflow names unrelated counter: %v", err)
+	err = st.AddCategorizedStoryUsage("p1", "US-all", allCategories(1), allCategories(1))
+	wantCategorized := "token usage overflow for story US-all: tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_main_cache_write, tokens_subagents_input, tokens_subagents_output, tokens_subagents_cache_read, tokens_subagents_cache_write"
+	if err == nil || err.Error() != wantCategorized {
+		t.Fatalf("multi categorized overflow error = %v, want %q", err, wantCategorized)
 	}
-	afterMulti, _, err := st.GetStoryUsage("p1", "US-multi")
-	if err != nil || afterMulti != beforeMulti {
-		t.Fatalf("multi overflow changed usage: before=%+v after=%+v err=%v", beforeMulti, afterMulti, err)
+	afterAll, _, err := st.GetStoryUsage("p1", "US-all")
+	if err != nil || afterAll != beforeAll {
+		t.Fatalf("multi overflow changed usage: before=%+v after=%+v err=%v", beforeAll, afterAll, err)
+	}
+
+	if err := st.AddStoryUsage("p1", "US-boundary", math.MaxInt64-1, math.MaxInt64-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddCategorizedStoryUsage("p1", "US-boundary", allCategories(math.MaxInt64-1), allCategories(math.MaxInt64-1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddStoryUsage("p1", "US-boundary", 1, 1); err != nil {
+		t.Fatalf("uncategorized exact-boundary update: %v", err)
+	}
+	if err := st.AddCategorizedStoryUsage("p1", "US-boundary", allCategories(1), allCategories(1)); err != nil {
+		t.Fatalf("categorized exact-boundary update: %v", err)
+	}
+	boundary, _, err := st.GetStoryUsage("p1", "US-boundary")
+	if err != nil || boundary.TokensMain != math.MaxInt64 || boundary.TokensSubagents != math.MaxInt64 ||
+		boundary.Main != allCategories(math.MaxInt64) || boundary.Subagents != allCategories(math.MaxInt64) {
+		t.Fatalf("exact-boundary usage = %+v err=%v", boundary, err)
 	}
 }
 

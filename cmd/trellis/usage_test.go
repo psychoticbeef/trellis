@@ -54,10 +54,18 @@ func TestExhaustiveOverflowErrorAcceptance_AT_44(t *testing.T) {
 	multi, _ := e.CreateNode(model.KindStory, "", "multi overflow", "", nil)
 	st.Close()
 
-	max := fmt.Sprint(int64(math.MaxInt64))
+	nearMax := fmt.Sprint(int64(math.MaxInt64 - 1))
+	categorizedNear := []string{"usage", "add", "p1", multi.ID,
+		"--main-input", nearMax, "--main-output", nearMax, "--main-cache-read", nearMax, "--main-cache-write", nearMax,
+		"--subagents-input", nearMax, "--subagents-output", nearMax, "--subagents-cache-read", nearMax, "--subagents-cache-write", nearMax}
+	categorizedOne := []string{"usage", "add", "p1", multi.ID,
+		"--main-input", "1", "--main-output", "1", "--main-cache-read", "1", "--main-cache-write", "1",
+		"--subagents-input", "1", "--subagents-output", "1", "--subagents-cache-read", "1", "--subagents-cache-write", "1"}
 	for _, args := range [][]string{
-		{"usage", "add", "p1", single.ID, "--main", max, "--subagents", "0"},
-		{"usage", "add", "p1", multi.ID, "--main-input", max, "--main-output", max, "--subagents-cache-write", max},
+		{"usage", "add", "p1", single.ID, "--main", nearMax, "--subagents", "0"},
+		{"usage", "add", "p1", single.ID, "--main", "1", "--subagents", "0"},
+		categorizedNear,
+		categorizedOne,
 	} {
 		if err := run(args); err != nil {
 			t.Fatalf("exact MaxInt64 boundary %v: %v", args, err)
@@ -89,7 +97,7 @@ func TestExhaustiveOverflowErrorAcceptance_AT_44(t *testing.T) {
 	}
 	multiErr := run([]string{"usage", "add", "p1", multi.ID,
 		"--main-input", "1", "--main-output", "2", "--main-cache-read", "9", "--subagents-cache-write", "3"})
-	multiWant := "token usage overflow for story " + multi.ID + ": tokens_main_input, tokens_main_output, tokens_subagents_cache_write"
+	multiWant := "token usage overflow for story " + multi.ID + ": tokens_main_input, tokens_main_output, tokens_main_cache_read, tokens_subagents_cache_write"
 	if multiErr == nil || multiErr.Error() != multiWant {
 		t.Fatalf("multi overflow error = %v, want %q", multiErr, multiWant)
 	}
