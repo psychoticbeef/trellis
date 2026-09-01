@@ -43,6 +43,7 @@
 - **US-38** — Unclaimed files fail audit
 - **US-39** — Categorized token usage
 - **US-40** — Exhaustive token usage overflow errors
+- **US-41** — Separate board overview and story detail
 
 ## Glossary
 
@@ -53,12 +54,14 @@
 - **cross-cutting spec** — Root-level architecture decision, referenced from arch specs via hash-pinned dependency links.
 - **evidence** — The proving tests recorded per test spec at finish; latest run replaces older records.
 - **gate** — A guard that must pass before a transition proceeds: structure, freshness, lint, tests, evidence, up-to-date branch.
+- **integrity marker** — Story label: stale for invalidated approval, blocked for other integrity problems, fresh otherwise.
 - **living context** — Done specs stay editable so context tracks reality; honesty comes from stale markers, not locks.
 - **prune** — Hard delete of a done story's tree when its feature leaves the product; the only way spec content disappears.
 - **sequencing link** — Unpinned story-to-story dependency: start waits until the prerequisite story is done.
 - **spec tree** — One story's hierarchy: acceptance tests, exactly one arch spec, integration tests, detail designs, unit test specs.
 - **stale** — An approval invalidated by a content, parent or dependency change; cleared only by re-approval.
 - **story** — Unit of work: a spec tree plus the gated lifecycle todo -> refined -> in_progress -> done.
+- **story detail overlay** — Read-only overlay showing complete story context.
 - **story worktree** — Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
 - **token usage** — Persisted per-story counts for main-agent and subagent tokens.
 - **uncategorized token usage** — Token usage stored only as main-agent and subagent totals.
