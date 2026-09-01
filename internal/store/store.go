@@ -80,10 +80,19 @@ CREATE TABLE IF NOT EXISTS evidence (
 	PRIMARY KEY (project_id, node_id)
 );
 CREATE TABLE IF NOT EXISTS story_usage (
-	project_id       TEXT NOT NULL,
-	story_id         TEXT NOT NULL,
-	tokens_main      INTEGER NOT NULL CHECK (tokens_main >= 0),
-	tokens_subagents INTEGER NOT NULL CHECK (tokens_subagents >= 0),
+	project_id                  TEXT NOT NULL,
+	story_id                    TEXT NOT NULL,
+	tokens_main                 INTEGER NOT NULL CHECK (tokens_main >= 0),
+	tokens_subagents            INTEGER NOT NULL CHECK (tokens_subagents >= 0),
+	tokens_main_input           INTEGER NOT NULL DEFAULT 0 CHECK (tokens_main_input >= 0),
+	tokens_main_output          INTEGER NOT NULL DEFAULT 0 CHECK (tokens_main_output >= 0),
+	tokens_main_cache_read      INTEGER NOT NULL DEFAULT 0 CHECK (tokens_main_cache_read >= 0),
+	tokens_main_cache_write     INTEGER NOT NULL DEFAULT 0 CHECK (tokens_main_cache_write >= 0),
+	tokens_subagents_input      INTEGER NOT NULL DEFAULT 0 CHECK (tokens_subagents_input >= 0),
+	tokens_subagents_output     INTEGER NOT NULL DEFAULT 0 CHECK (tokens_subagents_output >= 0),
+	tokens_subagents_cache_read  INTEGER NOT NULL DEFAULT 0 CHECK (tokens_subagents_cache_read >= 0),
+	tokens_subagents_cache_write INTEGER NOT NULL DEFAULT 0 CHECK (tokens_subagents_cache_write >= 0),
+	categorized                  INTEGER NOT NULL DEFAULT 0 CHECK (categorized IN (0, 1)),
 	PRIMARY KEY (project_id, story_id)
 );
 CREATE TABLE IF NOT EXISTS coverage (
@@ -145,6 +154,22 @@ func Open(path string) (*Store, error) {
 		!strings.Contains(err.Error(), "duplicate column") {
 		db.Close()
 		return nil, fmt.Errorf("migrate coverage_glob: %w", err)
+	}
+	usageColumns := []string{
+		"tokens_main_input", "tokens_main_output", "tokens_main_cache_read", "tokens_main_cache_write",
+		"tokens_subagents_input", "tokens_subagents_output", "tokens_subagents_cache_read", "tokens_subagents_cache_write",
+	}
+	for _, column := range usageColumns {
+		statement := fmt.Sprintf(`ALTER TABLE story_usage ADD COLUMN %s INTEGER NOT NULL DEFAULT 0 CHECK (%s >= 0)`, column, column)
+		if _, err := db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("migrate story usage %s: %w", column, err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE story_usage ADD COLUMN categorized INTEGER NOT NULL DEFAULT 0 CHECK (categorized IN (0, 1))`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate categorized story usage marker: %w", err)
 	}
 	// The arch singleton is a database invariant, not just an engine guard:
 	// even racing code paths cannot create two arch specs for one story.
