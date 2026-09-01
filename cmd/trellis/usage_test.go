@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -34,6 +35,81 @@ func TestCategorizedUsageFlagValidation_UT_41(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("empty flags missing %q: %s", want, joined)
 		}
+	}
+}
+
+// TestExhaustiveOverflowErrorAcceptance_AT_44 proves AT-44: real CLI overflow
+// errors name every affected counter and rejected reports remain atomic.
+func TestExhaustiveOverflowErrorAcceptance_AT_44(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "test", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := core.NewEngine(st, "p1")
+	single, _ := e.CreateNode(model.KindStory, "", "single overflow", "", nil)
+	multi, _ := e.CreateNode(model.KindStory, "", "multi overflow", "", nil)
+	st.Close()
+
+	max := fmt.Sprint(int64(math.MaxInt64))
+	for _, args := range [][]string{
+		{"usage", "add", "p1", single.ID, "--main", max, "--subagents", "0"},
+		{"usage", "add", "p1", multi.ID, "--main-input", max, "--main-output", max, "--subagents-cache-write", max},
+	} {
+		if err := run(args); err != nil {
+			t.Fatalf("exact MaxInt64 boundary %v: %v", args, err)
+		}
+	}
+
+	st, err = openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleBefore, _, err := st.GetStoryUsage("p1", single.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiBefore, _, err := st.GetStoryUsage("p1", multi.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seqBefore, err := st.MaxEventSeq("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	singleErr := run([]string{"usage", "add", "p1", single.ID, "--main", "1", "--subagents", "7"})
+	singleWant := "token usage overflow for story " + single.ID + ": tokens_main"
+	if singleErr == nil || singleErr.Error() != singleWant {
+		t.Fatalf("single overflow error = %v, want %q", singleErr, singleWant)
+	}
+	multiErr := run([]string{"usage", "add", "p1", multi.ID,
+		"--main-input", "1", "--main-output", "2", "--main-cache-read", "9", "--subagents-cache-write", "3"})
+	multiWant := "token usage overflow for story " + multi.ID + ": tokens_main_input, tokens_main_output, tokens_subagents_cache_write"
+	if multiErr == nil || multiErr.Error() != multiWant {
+		t.Fatalf("multi overflow error = %v, want %q", multiErr, multiWant)
+	}
+
+	st, err = openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	singleAfter, _, err := st.GetStoryUsage("p1", single.ID)
+	if err != nil || singleAfter != singleBefore {
+		t.Fatalf("single overflow changed counters: before=%+v after=%+v err=%v", singleBefore, singleAfter, err)
+	}
+	multiAfter, _, err := st.GetStoryUsage("p1", multi.ID)
+	if err != nil || multiAfter != multiBefore {
+		t.Fatalf("multi overflow changed counters: before=%+v after=%+v err=%v", multiBefore, multiAfter, err)
+	}
+	seqAfter, err := st.MaxEventSeq("p1")
+	if err != nil || seqAfter != seqBefore {
+		t.Fatalf("overflow changed event sequence: before=%d after=%d err=%v", seqBefore, seqAfter, err)
 	}
 }
 

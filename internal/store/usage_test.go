@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -98,6 +99,56 @@ func TestCategorizedUsagePersistence_UT_41(t *testing.T) {
 	got, ok, err = migrated.GetStoryUsage("p1", "US-37")
 	if err != nil || !ok || got.TokensMain != 105000 || got.TokensSubagents != 5800000 || got.Categorized {
 		t.Fatalf("legacy row reinterpreted by migration: %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+// TestOverflowEnumeration_UT_43 proves UT-43: overflow errors enumerate every
+// affected counter in schema order and rejected additions remain atomic.
+func TestOverflowEnumeration_UT_43(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "trellis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := st.AddStoryUsage("p1", "US-single", math.MaxInt64, 0); err != nil {
+		t.Fatal(err)
+	}
+	beforeSingle, _, err := st.GetStoryUsage("p1", "US-single")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.AddStoryUsage("p1", "US-single", 1, 7)
+	if err == nil || err.Error() != "token usage overflow for story US-single: tokens_main" {
+		t.Fatalf("single overflow error = %v", err)
+	}
+	afterSingle, _, err := st.GetStoryUsage("p1", "US-single")
+	if err != nil || afterSingle != beforeSingle {
+		t.Fatalf("single overflow changed usage: before=%+v after=%+v err=%v", beforeSingle, afterSingle, err)
+	}
+
+	maxMain := store.TokenCategories{Input: math.MaxInt64, CacheRead: math.MaxInt64}
+	maxSubagents := store.TokenCategories{Output: math.MaxInt64, CacheWrite: math.MaxInt64}
+	if err := st.AddCategorizedStoryUsage("p1", "US-multi", maxMain, maxSubagents); err != nil {
+		t.Fatal(err)
+	}
+	beforeMulti, _, err := st.GetStoryUsage("p1", "US-multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.AddCategorizedStoryUsage("p1", "US-multi",
+		store.TokenCategories{Input: 1, Output: 9, CacheRead: 2},
+		store.TokenCategories{Output: 3, CacheWrite: 4})
+	want := "token usage overflow for story US-multi: tokens_main_input, tokens_main_cache_read, tokens_subagents_output, tokens_subagents_cache_write"
+	if err == nil || err.Error() != want {
+		t.Fatalf("multi overflow error = %v, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "tokens_main_output,") {
+		t.Fatalf("multi overflow names unrelated counter: %v", err)
+	}
+	afterMulti, _, err := st.GetStoryUsage("p1", "US-multi")
+	if err != nil || afterMulti != beforeMulti {
+		t.Fatalf("multi overflow changed usage: before=%+v after=%+v err=%v", beforeMulti, afterMulti, err)
 	}
 }
 

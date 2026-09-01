@@ -45,6 +45,41 @@ func TestUsageValidation_UT_38(t *testing.T) {
 	}
 }
 
+// TestOverflowRejectionIntegration_IT_40 proves IT-40: engine propagation keeps
+// categorized counters and event sequence unchanged after exhaustive rejection.
+func TestOverflowRejectionIntegration_IT_40(t *testing.T) {
+	e, st := newEngineStore(t)
+	story := mustCreate(t, e, model.KindStory, "", "overflow story", nil)
+	maxMain := core.TokenCategories{Input: math.MaxInt64, CacheRead: math.MaxInt64}
+	maxSubagents := core.TokenCategories{Output: math.MaxInt64}
+	if err := e.AddCategorizedUsage(story.ID, maxMain, maxSubagents); err != nil {
+		t.Fatal(err)
+	}
+	before, ok, err := st.GetStoryUsage("p1", story.ID)
+	if err != nil || !ok {
+		t.Fatalf("usage before overflow: %+v ok=%v err=%v", before, ok, err)
+	}
+	seqBefore, err := st.MaxEventSeq("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = e.AddCategorizedUsage(story.ID,
+		core.TokenCategories{Input: 1, Output: 9, CacheRead: 2},
+		core.TokenCategories{Output: 3})
+	want := "token usage overflow for story " + story.ID + ": tokens_main_input, tokens_main_cache_read, tokens_subagents_output"
+	if err == nil || err.Error() != want {
+		t.Fatalf("overflow error = %v, want %q", err, want)
+	}
+	after, ok, err := st.GetStoryUsage("p1", story.ID)
+	if err != nil || !ok || after != before {
+		t.Fatalf("overflow changed usage: before=%+v after=%+v ok=%v err=%v", before, after, ok, err)
+	}
+	seqAfter, err := st.MaxEventSeq("p1")
+	if err != nil || seqAfter != seqBefore {
+		t.Fatalf("overflow changed event sequence: before=%d after=%d err=%v", seqBefore, seqAfter, err)
+	}
+}
+
 // TestUsageOverview_UT_39 proves UT-39: exact optional counters and compact
 // floor-to-k formatting appear only after first report.
 // TestCategorizedUsageFormatting_UT_42 proves UT-42: overview exposes exact

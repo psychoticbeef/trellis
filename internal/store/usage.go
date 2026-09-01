@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // TokenCategories holds categorized token counts for one agent group.
@@ -82,9 +83,45 @@ func (s *Store) addStoryUsage(projectID, storyID string, usage StoryUsage) error
 	if changed, err := result.RowsAffected(); err != nil {
 		return err
 	} else if changed == 0 {
-		return fmt.Errorf("token usage overflow for story %s", storyID)
+		current, ok, err := s.GetStoryUsage(projectID, storyID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("token usage overflow for story %s: persisted counters unavailable", storyID)
+		}
+		affected := overflowingUsageCounters(current, usage)
+		if len(affected) == 0 {
+			return fmt.Errorf("token usage overflow for story %s: affected counters unavailable", storyID)
+		}
+		return fmt.Errorf("token usage overflow for story %s: %s", storyID, strings.Join(affected, ", "))
 	}
 	return nil
+}
+
+func overflowingUsageCounters(current, added StoryUsage) []string {
+	counters := []struct {
+		name           string
+		current, added int64
+	}{
+		{"tokens_main", current.TokensMain, added.TokensMain},
+		{"tokens_subagents", current.TokensSubagents, added.TokensSubagents},
+		{"tokens_main_input", current.Main.Input, added.Main.Input},
+		{"tokens_main_output", current.Main.Output, added.Main.Output},
+		{"tokens_main_cache_read", current.Main.CacheRead, added.Main.CacheRead},
+		{"tokens_main_cache_write", current.Main.CacheWrite, added.Main.CacheWrite},
+		{"tokens_subagents_input", current.Subagents.Input, added.Subagents.Input},
+		{"tokens_subagents_output", current.Subagents.Output, added.Subagents.Output},
+		{"tokens_subagents_cache_read", current.Subagents.CacheRead, added.Subagents.CacheRead},
+		{"tokens_subagents_cache_write", current.Subagents.CacheWrite, added.Subagents.CacheWrite},
+	}
+	var affected []string
+	for _, counter := range counters {
+		if counter.added > 0 && counter.current > math.MaxInt64-counter.added {
+			affected = append(affected, counter.name)
+		}
+	}
+	return affected
 }
 
 // GetStoryUsage returns ok=false when no usage was reported for the story.
