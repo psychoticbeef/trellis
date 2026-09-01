@@ -114,10 +114,10 @@ func TestBoardOverviewAndOverlay_UT_44(t *testing.T) {
 		}
 	}
 	if !strings.Contains(cardHTML_UT_44(t, html, blocked.ID), ">blocked<") {
-		t.Error("fresh incomplete story must carry blocked marker")
+		t.Error("non-stale incomplete story must carry blocked integrity marker")
 	}
 	if !strings.Contains(cardHTML_UT_44(t, html, stale.ID), ">stale<") {
-		t.Error("stale marker must win over blocked state")
+		t.Error("stale marker must win over blocked integrity marker")
 	}
 	if strings.Contains(html, "https://") || strings.Contains(html, "http://") {
 		t.Fatal("static board contains external resource")
