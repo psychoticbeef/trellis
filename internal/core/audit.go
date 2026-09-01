@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,8 +12,8 @@ import (
 )
 
 // AuditReport separates hard violations (spec/reality drift) from purely
-// informational findings — the backward file direction never gates: a README
-// belongs to no feature and never should.
+// informational findings. Unclaimed non-meta files are violations; meta files
+// and unbound tests remain non-gating.
 type AuditReport struct {
 	Violations []string `json:"violations"`
 	Infos      []string `json:"infos"`
@@ -24,8 +23,8 @@ type AuditReport struct {
 // (US-n) are deliberately excluded: stories are not test-bound.
 var testSpecIDRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])((?:AT|IT|UT)[-_]\d+)(?:[^0-9]|$)`)
 
-// metaFileRe excludes common repository meta files from the unclaimed-file
-// info: they legitimately belong to no feature.
+// metaFileRe excludes common repository meta files from unclaimed-file
+// violations: they legitimately belong to no feature.
 var metaFileRe = regexp.MustCompile(`(?i)(^|/)(readme[^/]*|license[^/]*|contributing[^/]*|changelog[^/]*|features\.md|trellis-specs\.yaml|agents\.md|package(-lock)?\.json|go\.(mod|sum)|tsconfig[^/]*\.json|[^/]*\.config\.[jt]s|\.[^/]*)$`)
 
 // isMetaFile: meta names plus anything inside a dot-directory (.pi, .github…).
@@ -33,8 +32,30 @@ func isMetaFile(path string) bool {
 	return metaFileRe.MatchString(path) || strings.HasPrefix(path, ".") || strings.Contains(path, "/.")
 }
 
+func unclaimedFiles(tracked string, declared []string) []string {
+	var unclaimed []string
+	for _, f := range strings.Split(tracked, "\n") {
+		f = strings.TrimSpace(f)
+		if f == "" || isMetaFile(f) {
+			continue
+		}
+		claimed := false
+		for _, d := range declared {
+			if PathCovers(d, f) {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			unclaimed = append(unclaimed, f)
+		}
+	}
+	sort.Strings(unclaimed)
+	return unclaimed
+}
+
 // Audit validates spec and reality in both directions, repo-wide. It runs
-// the test command once, never mutates, and reports rather than blocks.
+// the test command once, never mutates, and returns every finding.
 func (e *Engine) Audit() (AuditReport, error) {
 	rep := AuditReport{Violations: []string{}, Infos: []string{}}
 	if e.Project.RepoPath == "" || e.Project.TestCmd == "" || e.Project.JUnitGlob == "" {
@@ -116,37 +137,15 @@ func (e *Engine) Audit() (AuditReport, error) {
 		rep.Infos = append(rep.Infos, fmt.Sprintf("%d test(s) reference no spec (unbound), e.g. %s", unbound, strings.Join(unboundSample, "; ")))
 	}
 
-	// Backward, files: unclaimed source files are informational only.
+	// Backward, files: every unclaimed non-meta file is one exhaustive violation.
 	g := gitops.Git{Dir: root}
 	tracked, err := g.Run("ls-files")
 	if err == nil {
-		var unclaimed []string
-		for _, f := range strings.Split(tracked, "\n") {
-			f = strings.TrimSpace(f)
-			if f == "" || isMetaFile(f) {
-				continue
-			}
-			claimed := false
-			for _, d := range declared {
-				if PathCovers(d, f) {
-					claimed = true
-					break
-				}
-			}
-			if !claimed {
-				unclaimed = append(unclaimed, f)
-			}
-		}
-		sort.Strings(unclaimed)
+		unclaimed := unclaimedFiles(tracked, declared)
 		if len(unclaimed) > 0 {
-			cap := unclaimed
-			if len(cap) > 15 {
-				cap = cap[:15]
-			}
-			rep.Infos = append(rep.Infos, fmt.Sprintf("%d file(s) claimed by no story (informational): %s", len(unclaimed), strings.Join(cap, ", ")))
+			rep.Violations = append(rep.Violations, fmt.Sprintf("%d file(s) claimed by no story: %s", len(unclaimed), strings.Join(unclaimed, ", ")))
 		}
 	}
-	_ = filepath.Separator
 	e.st.AppendEvent(e.pid(), "audit", "", fmt.Sprintf("%d violation(s), %d info(s)", len(rep.Violations), len(rep.Infos)))
 	return rep, nil
 }

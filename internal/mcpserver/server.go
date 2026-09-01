@@ -107,7 +107,7 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "The next startable stories: refined with all sequencing dependencies done, plus refined stories still blocked (with their unfinished dependencies)."},
 		s.nextStory)
 	mcp.AddTool(srv, &mcp.Tool{Name: "audit",
-		Description: "Bidirectional repo-wide validation: re-verifies every done story's tests and paths, flags tests referencing nonexistent specs (violations), lists unbound tests and unclaimed files (informational). Runs the test command; never mutates."},
+		Description: "Bidirectional repo-wide validation: re-verifies every done story's tests and paths, flags tests referencing nonexistent specs and unclaimed non-meta files (violations), and lists unbound tests (informational). Returns every finding; runs the test command; never mutates."},
 		s.audit)
 	mcp.AddTool(srv, &mcp.Tool{Name: "transition",
 		Description: "Run a story state-machine action: refine (todo->refined, requires complete approved tree), start (refined->in_progress, checks out feature branch), finish (in_progress->done, runs lint+tests, verifies test evidence per spec, merges into base branch), abort (in_progress->refined, discards the feature branch; requires clean worktree)."},

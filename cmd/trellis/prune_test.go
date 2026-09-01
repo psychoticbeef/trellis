@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -815,6 +816,9 @@ func TestAuditAcceptance_AT_37(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := e.SetPaths(s.ID, []string{"report-src.xml"}); err != nil {
+		t.Fatal(err)
+	}
 	for _, verb := range []string{"refine", "start", "finish"} {
 		if _, err := e.Transition(s.ID, verb); err != nil {
 			t.Fatalf("%s: %v", verb, err)
@@ -844,5 +848,107 @@ func TestAuditAcceptance_AT_37(t *testing.T) {
 	}
 	if len(rep.Violations) == 0 || !strings.Contains(strings.Join(rep.Violations, "\n"), "UT-1") {
 		t.Fatalf("report missing violation: %+v", rep)
+	}
+}
+
+// TestUnclaimedFilesBlockAuditAcceptance_AT_42 proves AT-42 (US-38): CLI
+// exits non-zero, report remains machine-readable and exhaustive, meta files
+// stay excluded, no opt-in exists, and finish ignores unclaimed files.
+func TestUnclaimedFilesBlockAuditAcceptance_AT_42(t *testing.T) {
+	t.Setenv("TRELLIS_DATA_DIR", t.TempDir())
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("reports/\n.trellis-worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := `<?xml version="1.0"?><testsuite><testcase name="Test_AT_1"/><testcase name="Test_IT_1"/><testcase name="Test_UT_1"/><testcase name="Test_UT_999"/></testsuite>`
+	for name, content := range map[string]string{
+		"report-src.xml": report,
+		"a/orphan.go":    "package orphan",
+		"z/orphan.go":    "package orphan",
+		"README.md":      "meta",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	st, err := openStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "t", RepoPath: repo, BaseBranch: "develop",
+		LintCmd: "true", TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := core.NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := e.CreateNode(model.KindStory, "", "s", "", nil)
+	e.AddAC(s.ID, "g", "w", "t")
+	at, _ := e.CreateNode(model.KindAcceptanceTest, s.ID, "at", "", []string{s.ID + ".AC-1"})
+	arch, _ := e.CreateNode(model.KindArch, s.ID, "as", "", nil)
+	it, _ := e.CreateNode(model.KindIntegrationTest, arch.ID, "it", "", nil)
+	dd, _ := e.CreateNode(model.KindDetailDesign, arch.ID, "dd", "", nil)
+	ut, _ := e.CreateNode(model.KindUnitTest, dd.ID, "ut", "", nil)
+	for _, id := range []string{s.ID, at.ID, arch.ID, it.ID, dd.ID, ut.ID} {
+		n, err := e.Node(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Approve(id, n.Hash, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.SetPaths(s.ID, []string{"report-src.xml", "impl.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"refine", "start"} {
+		if _, err := e.Transition(s.ID, verb); err != nil {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+	wt := filepath.Join(repo, ".trellis-worktrees", s.ID)
+	if err := os.WriteFile(filepath.Join(wt, "impl.txt"), []byte("implementation"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "implementation")
+	if _, err := e.Transition(s.ID, "finish"); err != nil {
+		t.Fatalf("finish must ignore unclaimed files: %v", err)
+	}
+
+	if err := run([]string{"audit", "p1"}); err == nil || !strings.Contains(err.Error(), "violation") {
+		t.Fatalf("audit must exit non-zero: %v", err)
+	}
+	if err := run([]string{"audit", "p1", "--allow-unclaimed"}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("audit must expose no opt-in: %v", err)
+	}
+	rep, err := e.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded core.AuditReport
+	if err := json.Unmarshal(blob, &decoded); err != nil {
+		t.Fatalf("machine-readable report: %v", err)
+	}
+	joined := strings.Join(decoded.Violations, "\n")
+	for _, want := range []string{"references nonexistent spec UT-999", "2 file(s) claimed by no story", "a/orphan.go", "z/orphan.go"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("report missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "README.md") || strings.Contains(strings.Join(decoded.Infos, "\n"), "claimed by no story") {
+		t.Fatalf("meta exclusion or info classification changed: %+v", decoded)
 	}
 }
