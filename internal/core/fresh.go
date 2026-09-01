@@ -385,13 +385,21 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 }
 
 type StorySummary struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`
-	Status          string `json:"status"`
-	Ready           bool   `json:"gates_open"`
-	TokensMain      *int64 `json:"tokens_main,omitempty"`
-	TokensSubagents *int64 `json:"tokens_subagents,omitempty"`
-	Usage           string `json:"usage,omitempty"`
+	ID                        string `json:"id"`
+	Title                     string `json:"title"`
+	Status                    string `json:"status"`
+	Ready                     bool   `json:"gates_open"`
+	TokensMain                *int64 `json:"tokens_main,omitempty"`
+	TokensSubagents           *int64 `json:"tokens_subagents,omitempty"`
+	TokensMainInput           *int64 `json:"tokens_main_input,omitempty"`
+	TokensMainOutput          *int64 `json:"tokens_main_output,omitempty"`
+	TokensMainCacheRead       *int64 `json:"tokens_main_cache_read,omitempty"`
+	TokensMainCacheWrite      *int64 `json:"tokens_main_cache_write,omitempty"`
+	TokensSubagentsInput      *int64 `json:"tokens_subagents_input,omitempty"`
+	TokensSubagentsOutput     *int64 `json:"tokens_subagents_output,omitempty"`
+	TokensSubagentsCacheRead  *int64 `json:"tokens_subagents_cache_read,omitempty"`
+	TokensSubagentsCacheWrite *int64 `json:"tokens_subagents_cache_write,omitempty"`
+	Usage                     string `json:"usage,omitempty"`
 }
 
 type CCSummary struct {
@@ -467,7 +475,21 @@ func (e *Engine) Overview() (Overview, error) {
 			main, subagents := usage.TokensMain, usage.TokensSubagents
 			summary.TokensMain = &main
 			summary.TokensSubagents = &subagents
-			summary.Usage = FormatUsage(main, subagents)
+			if hasCategorizedUsage(usage) {
+				mainInput, mainOutput := usage.Main.Input, usage.Main.Output
+				mainCacheRead, mainCacheWrite := usage.Main.CacheRead, usage.Main.CacheWrite
+				subagentsInput, subagentsOutput := usage.Subagents.Input, usage.Subagents.Output
+				subagentsCacheRead, subagentsCacheWrite := usage.Subagents.CacheRead, usage.Subagents.CacheWrite
+				summary.TokensMainInput = &mainInput
+				summary.TokensMainOutput = &mainOutput
+				summary.TokensMainCacheRead = &mainCacheRead
+				summary.TokensMainCacheWrite = &mainCacheWrite
+				summary.TokensSubagentsInput = &subagentsInput
+				summary.TokensSubagentsOutput = &subagentsOutput
+				summary.TokensSubagentsCacheRead = &subagentsCacheRead
+				summary.TokensSubagentsCacheWrite = &subagentsCacheWrite
+			}
+			summary.Usage = FormatStoryUsage(usage)
 		}
 		o.Stories = append(o.Stories, summary)
 	}

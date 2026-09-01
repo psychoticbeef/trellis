@@ -37,6 +37,8 @@ Usage:
   trellis serve --project <project-id> [--board-addr <addr>]   run MCP server (stdio) + board UI (default 127.0.0.1:7420, off disables)
   trellis tree <project-id> <story-id>                         print a story's spec tree
   trellis usage add <project-id> <story-id> --main N --subagents N
+  trellis usage add <project-id> <story-id> [--main-input N] [--main-output N] [--main-cache-read N] [--main-cache-write N]
+      [--subagents-input N] [--subagents-output N] [--subagents-cache-read N] [--subagents-cache-write N]
                                                                accumulate trusted extension token usage
   trellis log <project-id> [-n <count>]                        print the event log
   trellis prune <project-id> <story-id>                        delete a done story's tree

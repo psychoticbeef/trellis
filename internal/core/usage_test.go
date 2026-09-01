@@ -47,6 +47,62 @@ func TestUsageValidation_UT_38(t *testing.T) {
 
 // TestUsageOverview_UT_39 proves UT-39: exact optional counters and compact
 // floor-to-k formatting appear only after first report.
+// TestCategorizedUsageFormatting_UT_42 proves UT-42: overview exposes exact
+// category counters and shared compact formatting preserves legacy-only output.
+func TestCategorizedUsageFormatting_UT_42(t *testing.T) {
+	for in, want := range map[int64]string{0: "0", 999: "999", 1000: "1k", 1999: "1k"} {
+		if got := core.FormatTokenCount(in); got != want {
+			t.Errorf("FormatTokenCount(%d) = %q, want %q", in, got, want)
+		}
+	}
+	e := newEngine(t)
+	categorized := mustCreate(t, e, model.KindStory, "", "categorized", nil)
+	legacy := mustCreate(t, e, model.KindStory, "", "legacy", nil)
+	zero := mustCreate(t, e, model.KindStory, "", "categorized zero", nil)
+	if err := e.AddUsage(categorized.ID, 100, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddCategorizedUsage(categorized.ID,
+		core.TokenCategories{Input: 1000, Output: 200, CacheRead: 3000, CacheWrite: 400},
+		core.TokenCategories{Input: 500, Output: 300, CacheRead: 2000, CacheWrite: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddUsage(legacy.ID, 1999, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddCategorizedUsage(zero.ID, core.TokenCategories{}, core.TokenCategories{}); err != nil {
+		t.Fatal(err)
+	}
+	o, err := e.Overview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]core.StorySummary{}
+	for _, summary := range o.Stories {
+		byID[summary.ID] = summary
+	}
+	got := byID[categorized.ID]
+	if got.Usage != "7k (2k sub) · out 500 · cache 5k/500 r/w" ||
+		got.TokensMainInput == nil || *got.TokensMainInput != 1000 ||
+		got.TokensMainOutput == nil || *got.TokensMainOutput != 200 ||
+		got.TokensMainCacheRead == nil || *got.TokensMainCacheRead != 3000 ||
+		got.TokensMainCacheWrite == nil || *got.TokensMainCacheWrite != 400 ||
+		got.TokensSubagentsInput == nil || *got.TokensSubagentsInput != 500 ||
+		got.TokensSubagentsOutput == nil || *got.TokensSubagentsOutput != 300 ||
+		got.TokensSubagentsCacheRead == nil || *got.TokensSubagentsCacheRead != 2000 ||
+		got.TokensSubagentsCacheWrite == nil || *got.TokensSubagentsCacheWrite != 100 {
+		t.Fatalf("categorized summary = %+v", got)
+	}
+	legacySummary := byID[legacy.ID]
+	if legacySummary.Usage != "2k (999 sub)" || legacySummary.TokensMainInput != nil {
+		t.Fatalf("legacy summary changed = %+v", legacySummary)
+	}
+	zeroSummary := byID[zero.ID]
+	if zeroSummary.Usage != "0 (0 sub) · out 0 · cache 0/0 r/w" || zeroSummary.TokensMainInput == nil || *zeroSummary.TokensMainInput != 0 {
+		t.Fatalf("zero categorized summary = %+v", zeroSummary)
+	}
+}
+
 func TestUsageOverview_UT_39(t *testing.T) {
 	e := newEngine(t)
 	story := mustCreate(t, e, model.KindStory, "", "usage story", nil)
