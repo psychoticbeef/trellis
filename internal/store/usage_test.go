@@ -132,9 +132,17 @@ func TestOverflowEnumeration_UT_43(t *testing.T) {
 	if err := st.AddCategorizedStoryUsage("p1", "US-single-category", store.TokenCategories{Output: math.MaxInt64}, store.TokenCategories{}); err != nil {
 		t.Fatal(err)
 	}
+	beforeSingleCategory, _, err := st.GetStoryUsage("p1", "US-single-category")
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = st.AddCategorizedStoryUsage("p1", "US-single-category", store.TokenCategories{Input: 9, Output: 1}, store.TokenCategories{})
 	if err == nil || err.Error() != "token usage overflow for story US-single-category: tokens_main_output" {
 		t.Fatalf("single categorized overflow error = %v", err)
+	}
+	afterSingleCategory, _, err := st.GetStoryUsage("p1", "US-single-category")
+	if err != nil || afterSingleCategory != beforeSingleCategory {
+		t.Fatalf("single categorized overflow changed usage: before=%+v after=%+v err=%v", beforeSingleCategory, afterSingleCategory, err)
 	}
 
 	if err := st.AddStoryUsage("p1", "US-all", math.MaxInt64, math.MaxInt64); err != nil {
