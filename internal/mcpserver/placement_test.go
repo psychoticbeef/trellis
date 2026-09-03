@@ -17,8 +17,8 @@ import (
 // preserves done-story lifecycle and approval state while projecting metadata.
 func TestPlacementMutationAndProjection_AT_49_IT_46(t *testing.T) {
 	cs := client(t)
-	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})["id"].(string)
 	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "done story"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})["id"].(string)
 	approveMCP(t, cs, story)
 	if err := lastStore.SetNodeStatus("p1", story, model.StatusDone); err != nil {
 		t.Fatal(err)
@@ -53,12 +53,35 @@ func TestPlacementMutationAndProjection_AT_49_IT_46(t *testing.T) {
 // while the story map is incomplete.
 func TestOptionalUnmappedStory_AT_50(t *testing.T) {
 	cs := client(t)
-	call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})
 	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
 	for _, field := range []string{"activity", "rank", "slice"} {
 		if _, ok := story[field]; ok {
 			t.Fatalf("unmapped story unexpectedly has %s: %v", field, story)
 		}
+	}
+}
+
+// TestPlacementGateAcceptance_AT_52_IT_47 proves dynamic map-complete
+// derivation and mutation guards through MCP.
+func TestPlacementGateAcceptance_AT_52_IT_47(t *testing.T) {
+	cs := client(t)
+	first := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "first unmapped"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})["id"].(string)
+	second := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "second unmapped"})["id"].(string)
+	call(t, cs, "set_map_position", map[string]any{"story_id": first, "activity_id": activity, "slice": 1})
+	call(t, cs, "set_map_position", map[string]any{"story_id": second, "activity_id": activity, "slice": 2})
+
+	callErr(t, cs, "create_node", map[string]any{"kind": "story", "title": "blocked"},
+		"create_node placement gate rejected", "map complete", activity, "Build", "open slices", "1", "2", "3")
+	third := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "placed after rejection", "activity_id": activity, "slice": 3})
+	if third["id"] != "US-3" {
+		t.Fatalf("rejected create consumed story id: %v", third)
+	}
+	callErr(t, cs, "set_map_position", map[string]any{"story_id": first, "activity_id": "", "slice": 0},
+		"set_map_position placement gate rejected", "map complete", first, activity, "open slices")
+	placed := call(t, cs, "get_node", map[string]any{"id": first})
+	if placed["activity"] != activity || placed["slice"] != float64(1) {
+		t.Fatalf("rejected placement clear changed story: %v", placed)
 	}
 }
 
@@ -102,6 +125,12 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 		t.Fatal("set_map_position tool missing")
 	}
 
+	unmapped := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
+	for _, field := range []string{"activity", "rank", "slice"} {
+		if _, ok := unmapped[field]; ok {
+			t.Fatalf("unmapped projection contains %s: %v", field, unmapped)
+		}
+	}
 	build := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "position": 2})["id"].(string)
 	ship := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Ship", "position": 1})["id"].(string)
 	placed := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "placed", "activity_id": build, "slice": 3})
@@ -110,16 +139,11 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 	}
 	call(t, cs, "create_node", map[string]any{"kind": "story", "title": "other activity", "activity_id": ship, "slice": 1})
 	call(t, cs, "create_node", map[string]any{"kind": "story", "title": "other slice", "activity_id": build, "slice": 4})
-	unmapped := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
-	for _, field := range []string{"activity", "rank", "slice"} {
-		if _, ok := unmapped[field]; ok {
-			t.Fatalf("unmapped projection contains %s: %v", field, unmapped)
-		}
-	}
 	tree := call(t, cs, "get_tree", map[string]any{"story_id": placed["id"]})["story"].(map[string]any)
 	if tree["activity"] != build || tree["rank"] != float64(1) || tree["slice"] != float64(3) {
 		t.Fatalf("get_tree placement=%v", tree)
 	}
+	call(t, cs, "delete_node", map[string]any{"id": unmapped["id"]})
 	doc, err := lastEngine.ExportYAML()
 	if err != nil {
 		t.Fatal(err)

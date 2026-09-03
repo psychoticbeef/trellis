@@ -1023,9 +1023,9 @@ func TestActivityBackboneAcceptance_AT_47_UT_47_IT_44(t *testing.T) {
 // deletion guards and placed-story freshness isolation through MCP.
 func TestActivityReferenceAcceptance_AT_48_UT_47(t *testing.T) {
 	cs := client(t)
-	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "body": "old"})["id"].(string)
 	story1 := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "one"})["id"].(string)
 	story2 := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "two"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "body": "old"})["id"].(string)
 	for _, story := range []string{story1, story2} {
 		if err := lastStore.SetStoryActivity("p1", story, activity); err != nil {
 			t.Fatal(err)

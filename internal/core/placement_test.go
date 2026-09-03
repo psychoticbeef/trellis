@@ -13,6 +13,9 @@ import (
 // and append ranking scoped by activity and slice.
 func TestStoryPlacementEngine_UT_50(t *testing.T) {
 	e := newEngine(t)
+	// Existing unmapped story keeps map incomplete while optional placement
+	// behavior from US-44 is exercised.
+	mustCreate(t, e, model.KindStory, "", "incomplete seed", nil)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
 	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
 
@@ -59,10 +62,96 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 	wantErr(t, err, "only valid on story nodes")
 }
 
+// TestPlacementGateState_UT_52_UT_57_IT_47 proves mutation guards, per-call
+// derivation without a flag, exhaustive candidates, and map-incomplete
+// compatibility.
+func TestPlacementGateState_UT_52_UT_57_IT_47(t *testing.T) {
+	t.Run("activities with zero stories", func(t *testing.T) {
+		e, st := newEngineStore(t)
+		build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+		ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+		beforeCounters, _ := st.ListCounters(e.Project.ID)
+		beforeEvents, _ := st.ListEvents(e.Project.ID, 1000)
+
+		_, err := e.CreateNode(model.KindStory, "", "blocked", "", nil)
+		wantErr(t, err, "create_node placement gate rejected", "map complete",
+			"activities:\n- "+build.ID+" (Build)\n- "+ship.ID+" (Ship)", "open slices:\n- 1")
+		afterCounters, _ := st.ListCounters(e.Project.ID)
+		afterEvents, _ := st.ListEvents(e.Project.ID, 1000)
+		if !reflect.DeepEqual(beforeCounters, afterCounters) || !reflect.DeepEqual(beforeEvents, afterEvents) {
+			t.Fatalf("rejected create wrote state: counters %v -> %v, events %v -> %v", beforeCounters, afterCounters, beforeEvents, afterEvents)
+		}
+	})
+
+	e, st := newEngineStore(t)
+	first := mustCreate(t, e, model.KindStory, "", "first unmapped", nil)
+	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+
+	// Existing unmapped story means map incomplete: old behavior stays for
+	// story creation and placement-clear validation.
+	second := mustCreate(t, e, model.KindStory, "", "second unmapped", nil)
+	_, err := e.SetMapPosition(first.ID, "", 0)
+	wantErr(t, err, "activity_id is required", "slice must be at least 1")
+	if strings.Contains(err.Error(), "placement gate") {
+		t.Fatalf("map-incomplete clear gained placement gate: %v", err)
+	}
+	if _, err := e.SetMapPosition(first.ID, build.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SetMapPosition(second.ID, build.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Placement of last unmapped story changes next call immediately. No flag.
+	beforeCounters, _ := st.ListCounters(e.Project.ID)
+	beforeEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	_, err = e.CreateNode(model.KindStory, "", "blocked", "", nil)
+	wantErr(t, err, "create_node placement gate rejected", "map complete",
+		"activities:\n- "+build.ID+" (Build)\n- "+ship.ID+" (Ship)", "open slices:\n- 1\n- 3\n- 4")
+	afterCounters, _ := st.ListCounters(e.Project.ID)
+	afterEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	if !reflect.DeepEqual(beforeCounters, afterCounters) || !reflect.DeepEqual(beforeEvents, afterEvents) {
+		t.Fatalf("rejected create wrote state: counters %v -> %v, events %v -> %v", beforeCounters, afterCounters, beforeEvents, afterEvents)
+	}
+
+	before, err := e.Node(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.SetMapPosition(first.ID, "", 0)
+	wantErr(t, err, "set_map_position placement gate rejected", "map complete", first.ID, build.ID, ship.ID, "open slices")
+	after, err := e.Node(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Activity != after.Activity || before.Rank == nil || after.Rank == nil || *before.Rank != *after.Rank || before.Slice == nil || after.Slice == nil || *before.Slice != *after.Slice {
+		t.Fatalf("rejected clear changed placement: before=%+v after=%+v", before, after)
+	}
+
+	// Permitted deletions return project to map incomplete; next call derives it.
+	if err := e.DeleteNode(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(build.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(ship.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.CreateNode(model.KindStory, "", "allowed again", "", nil); err != nil {
+		t.Fatalf("map-incomplete behavior changed: %v", err)
+	}
+}
+
 // TestPlacementPersistenceAndLifecycle_IT_45 proves real-store reload and
 // placement metadata isolation for approved done stories.
 func TestPlacementPersistenceAndLifecycle_IT_45(t *testing.T) {
 	e, st := newEngineStore(t)
+	mustCreate(t, e, model.KindStory, "", "incomplete seed", nil)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
 	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
 	todo := mustCreate(t, e, model.KindStory, "", "todo story", nil)

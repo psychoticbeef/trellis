@@ -68,7 +68,8 @@ func TestExportFormat_UT_26(t *testing.T) {
 
 	// Counters preserved: new story and activity ids continue, never reuse.
 	e2b, _ := NewEngine(st, "p2")
-	n, err := e2b.CreateNode("story", "", "next", "", nil)
+	slice := 1
+	n, err := e2b.CreateNodeWithPlacement(model.KindStory, "", "next", "", nil, nil, activity.ID, &slice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,11 +108,11 @@ func TestLegacyActivityReferenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	activity, err := e.CreateNode(model.KindActivity, "", "Build", "", nil)
+	story, err := e.CreateNode(model.KindStory, "", "Story", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	story, err := e.CreateNode(model.KindStory, "", "Story", "", nil)
+	activity, err := e.CreateNode(model.KindActivity, "", "Build", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

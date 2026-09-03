@@ -148,6 +148,15 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 	if placementRequested && kind != model.KindStory {
 		return model.Node{}, fmt.Errorf("activity_id and slice are only valid on story nodes")
 	}
+	if kind == model.KindStory && !placementRequested {
+		state, err := e.derivePlacementGateState()
+		if err != nil {
+			return model.Node{}, err
+		}
+		if state.complete {
+			return model.Node{}, placementGateError("create_node", state, nil)
+		}
+	}
 	if placementRequested {
 		if err := e.validatePlacement("create_node", activityID, slice); err != nil {
 			return model.Node{}, err
@@ -251,6 +260,12 @@ func (e *Engine) setMapPositionUnlocked(storyID, activityID string, slice int) (
 		violations = append(violations, storyErr.Error())
 	} else if story.Kind != model.KindStory {
 		violations = append(violations, fmt.Sprintf("%s is a %s, not a story", storyID, story.Kind))
+	}
+	state, stateErr := e.derivePlacementGateState()
+	if stateErr != nil {
+		violations = append(violations, stateErr.Error())
+	} else if state.complete && storyErr == nil && story.Kind == model.KindStory && activityID == "" {
+		violations = append(violations, placementGateError("set_map_position", state, []string{storyID}).Error())
 	}
 	if placementErr := e.validatePlacement("set_map_position", activityID, &slice); placementErr != nil {
 		violations = append(violations, placementErr.Error())
