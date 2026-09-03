@@ -459,6 +459,7 @@ type Overview struct {
 	Description  string            `json:"description,omitempty"`
 	Coverage     *CoverageSummary  `json:"coverage,omitempty"`
 	Activities   []ActivitySummary `json:"activities,omitempty"`
+	StoryMap     *StoryMapOverview `json:"story_map,omitempty"`
 	Stories      []StorySummary    `json:"stories"`
 	CrossCutting []CCSummary       `json:"cross_cutting"`
 	Glossary     []store.TermDef   `json:"glossary"`
@@ -541,6 +542,10 @@ func (e *Engine) Overview() (Overview, error) {
 			summary.Usage = FormatStoryUsage(usage)
 		}
 		o.Stories = append(o.Stories, summary)
+	}
+	if len(activities) > 0 {
+		storyMap := buildStoryMapOverview(activities, stories, o.Stories)
+		o.StoryMap = &storyMap
 	}
 	ccs, err := e.st.ListNodesByKind(e.pid(), model.KindCrossCutting)
 	if err != nil {
