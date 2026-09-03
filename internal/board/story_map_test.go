@@ -120,8 +120,31 @@ func mapCard(t *testing.T, html, storyID string) string {
 	return panel[start : start+end]
 }
 
+func activateMapCard(t *testing.T, html, storyID string) string {
+	t.Helper()
+	card := mapCard(t, html, storyID)
+	control := `aria-controls="story-` + storyID + `"`
+	if !strings.Contains(card, control) {
+		t.Fatalf("map card %s does not target story detail overlay", storyID)
+	}
+	for _, hook := range []string{
+		`event.target.closest('[data-story-open]')`,
+		`document.getElementById('story-' + storyOpener.getAttribute('data-story-open'))`,
+		`openStoryDetail(`,
+	} {
+		if !strings.Contains(html, hook) {
+			t.Fatalf("map card activation hook missing %q", hook)
+		}
+	}
+	start := strings.Index(html, `id="story-`+storyID+`"`)
+	if start < 0 {
+		t.Fatalf("story detail overlay %s missing", storyID)
+	}
+	return html[start:]
+}
+
 // TestStoryMapProjection_UT_60 proves UT-60: map projection orders activities,
-// used slices, and cards while preserving status, integrity, and placement.
+// used slices, and cards while preserving status, integrity marker, and placement.
 func TestStoryMapProjection_UT_60(t *testing.T) {
 	fixture := newStoryMapFixture(t)
 	html, err := board.Render(fixture.engine)
@@ -210,6 +233,9 @@ func TestConditionalMapHTML_UT_61(t *testing.T) {
 		`role="tablist"`, `role="tab" aria-selected="true"`, `role="tabpanel"`,
 		`tabindex="-1" data-board-tab="map"`, `data-map-unmapped`, `data-map-unmapped-cell`,
 		"activateBoardTab", "ArrowRight", "ArrowLeft", "Home", "End", ".map-grid", ".board-tab",
+		`candidate.setAttribute('aria-selected', selected ? 'true' : 'false')`,
+		`candidate.setAttribute('tabindex', selected ? '0' : '-1')`,
+		`if (panel) panel.hidden = !selected`, `if (moveFocus) tab.focus()`,
 	} {
 		if !strings.Contains(mapped, want) {
 			t.Errorf("activity HTML missing %q", want)
@@ -249,10 +275,44 @@ func TestStoryMapSharedRenderPaths_IT_52(t *testing.T) {
 			`data-board-tab="map"`, `data-map-activity="` + fixture.shipID + `"`,
 			`data-map-slice="1"`, `data-map-slice="3"`, `data-map-unmapped-cell`,
 			`data-story-open="` + fixture.mappedID + `"`, `data-story-placement="` + fixture.mappedID + `"`,
-			`data-placement-rank>2<`, `data-placement-slice>3<`,
+			`data-placement-activity`, fixture.buildID, `data-placement-rank>2<`, `data-placement-slice>3<`,
 		} {
 			if !strings.Contains(html, want) {
 				t.Errorf("%s render missing %q", name, want)
+			}
+		}
+		panel := mapPanel(t, html)
+		ship := strings.Index(panel, `data-map-activity="`+fixture.shipID+`"`)
+		build := strings.Index(panel, `data-map-activity="`+fixture.buildID+`"`)
+		sliceOne := strings.Index(panel, `data-map-slice="1"`)
+		sliceThree := strings.Index(panel, `data-map-slice="3"`)
+		if !(ship >= 0 && ship < build && build < strings.Index(panel, "data-map-unmapped")) {
+			t.Errorf("%s activity or unmapped story column order wrong", name)
+		}
+		if !(sliceOne >= 0 && sliceOne < sliceThree) {
+			t.Errorf("%s slice row order wrong", name)
+		}
+		cellStart := strings.Index(panel, `data-map-cell="`+fixture.buildID+`:3"`)
+		if cellStart < 0 {
+			t.Errorf("%s build slice 3 cell missing", name)
+		} else {
+			cellEnd := strings.Index(panel[cellStart:], "</td>")
+			if cellEnd < 0 {
+				t.Errorf("%s build slice 3 cell has no end", name)
+			} else {
+				cell := panel[cellStart : cellStart+cellEnd]
+				first := strings.Index(cell, fixture.rankOneA)
+				second := strings.Index(cell, fixture.rankOneB)
+				third := strings.Index(cell, fixture.mappedID)
+				if !(first >= 0 && first < second && second < third) {
+					t.Errorf("%s placement rank/story id order wrong", name)
+				}
+			}
+		}
+		card := mapCard(t, html, fixture.mappedID)
+		for _, want := range []string{`class="state st-done"`, `class="mark card-marker stale"`, ">stale<"} {
+			if !strings.Contains(card, want) {
+				t.Errorf("%s map card missing status or integrity marker %q", name, want)
 			}
 		}
 		if strings.Contains(html, "fetch(") || strings.Contains(html, `method="post"`) {
@@ -367,11 +427,8 @@ func TestStoryMapBoardAcceptance_AT_60(t *testing.T) {
 		if strings.Index(panel, `data-map-activity="`+fixture.buildID+`"`) > strings.Index(panel, "data-map-unmapped") {
 			t.Errorf("%s unmapped column not trailing", name)
 		}
-		card := mapCard(t, html, fixture.mappedID)
-		if !strings.Contains(card, `aria-controls="story-`+fixture.mappedID+`"`) || !strings.Contains(html, `id="story-`+fixture.mappedID+`"`) {
-			t.Errorf("%s map card does not target existing story overlay", name)
-		}
-		placement := storyPlacement(t, html, fixture.mappedID)
+		detail := activateMapCard(t, html, fixture.mappedID)
+		placement := storyPlacement(t, detail, fixture.mappedID)
 		for _, want := range []string{fixture.buildID, `data-placement-rank>2<`, `data-placement-slice>3<`} {
 			if !strings.Contains(placement, want) {
 				t.Errorf("%s activated detail structure missing %q", name, want)
