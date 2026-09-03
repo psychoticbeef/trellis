@@ -15,6 +15,7 @@ type Kind string
 
 const (
 	KindStory           Kind = "story"
+	KindActivity        Kind = "activity"
 	KindAcceptanceTest  Kind = "acceptance_test"
 	KindArch            Kind = "arch"
 	KindIntegrationTest Kind = "integration_test"
@@ -33,6 +34,7 @@ const (
 
 var prefixes = map[Kind]string{
 	KindStory:           "US",
+	KindActivity:        "UA",
 	KindAcceptanceTest:  "AT",
 	KindArch:            "AS",
 	KindIntegrationTest: "IT",
@@ -69,15 +71,17 @@ func ParentKind(k Kind) (Kind, bool) {
 }
 
 type Node struct {
-	ID        string
-	ProjectID string
-	Kind      Kind
-	ParentID  string // empty for story and cross_cutting
-	Title     string
-	Body      string
-	Covers    []string // acceptance_test only: AC ids this test proves
-	Paths     []string // story only: repo-relative files/folders realizing it; metadata, never hashed
-	Status    string   // story only
+	ID         string
+	ProjectID  string
+	Kind       Kind
+	ParentID   string // empty for story, activity and cross_cutting
+	Title      string
+	Body       string
+	Covers     []string // acceptance_test only: AC ids this test proves
+	Paths      []string // story only: repo-relative files/folders realizing it; metadata, never hashed
+	Status     string   // story only
+	Position   int      // activity only: story map order; metadata, never hashed
+	ActivityID string   // story only: activity in placement; metadata, never hashed
 	// Approval bookkeeping. Empty = never approved.
 	ApprovedContentHash string
 	ApprovedParentHash  string

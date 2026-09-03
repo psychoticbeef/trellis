@@ -627,6 +627,21 @@ func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.DefineTerm("gate", "guard that blocks a transition")
+	position := 2
+	activity, err := e.CreateNodeWithPosition(model.KindActivity, "", "Build", "activity body", nil, &position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activityReport, err := e.Node(activity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Approve(activity.ID, activityReport.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStoryActivity("p1", s.ID, activity.ID); err != nil {
+		t.Fatal(err)
+	}
 	st.Close()
 
 	// Export via CLI, import as a new project, export again: round trip.
@@ -661,8 +676,9 @@ func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
 	if string(b1) != string(b2) {
 		t.Fatalf("round trip diverged:\n%s\n---\n%s", b1, b2)
 	}
-	if !strings.Contains(string(b1), "recorded_at") || !strings.Contains(string(b1), "gate") {
-		t.Fatal("export missing evidence or glossary")
+	if !strings.Contains(string(b1), "recorded_at") || !strings.Contains(string(b1), "gate") ||
+		!strings.Contains(string(b1), "activities:") || !strings.Contains(string(b1), "activity: UA-1") {
+		t.Fatal("export missing evidence, glossary, activity or placement")
 	}
 
 	// Counters preserved: next story id in the copy continues.
@@ -681,6 +697,13 @@ func TestExportImportCLIAcceptance_AT_29(t *testing.T) {
 	}
 	if n.ID != "US-2" {
 		t.Fatalf("counter lost: %s, want US-2", n.ID)
+	}
+	a, err := e3.CreateNode(model.KindActivity, "", "next activity", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID != "UA-2" || a.Position != 3 {
+		t.Fatalf("activity counter/position lost: %+v", a)
 	}
 	if err := e3.DeleteNode(n.ID); err != nil {
 		t.Fatal(err)

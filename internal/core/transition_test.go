@@ -845,6 +845,15 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 	if err := e.DefineTerm("gate", "guard that blocks a transition"); err != nil {
 		t.Fatal(err)
 	}
+	position := 3
+	activity, err := e.CreateNodeWithPosition(model.KindActivity, "", "Build", "activity body", nil, &position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, e, activity.ID)
+	if err := st.SetStoryActivity(e.Project.ID, a.story, activity.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Round trip.
 	doc, err := e.ExportYAML()
@@ -864,6 +873,14 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 	}
 	if doc != doc9 {
 		t.Fatalf("round trip diverged:\n%s\n---\n%s", doc, doc9)
+	}
+	placed, err := st.GetNode("p9", a.story)
+	if err != nil || placed.ActivityID != activity.ID {
+		t.Fatalf("story placement did not round trip: node=%+v err=%v", placed, err)
+	}
+	activities, err := st.ListActivities("p9")
+	if err != nil || len(activities) != 1 || activities[0].Position != 3 {
+		t.Fatalf("activities did not round trip: %+v err=%v", activities, err)
 	}
 	// Approvals survived: the done story is still fresh in the copy.
 	if n, _ := e9.Node(a.arch); !n.Fresh {
