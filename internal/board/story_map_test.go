@@ -249,7 +249,8 @@ func TestConditionalMapHTML_UT_61(t *testing.T) {
 }
 
 // TestStoryMapSharedRenderPaths_IT_52 proves IT-52: static, --serve, and MCP
-// board handlers share map markup, detail placement, and read-only behavior.
+// board handlers share map markup and detail placement; shared Render stays
+// read-only while later live-only capabilities may augment served output.
 func TestStoryMapSharedRenderPaths_IT_52(t *testing.T) {
 	fixture := newStoryMapFixture(t)
 	static, err := board.Render(fixture.engine)
@@ -315,9 +316,9 @@ func TestStoryMapSharedRenderPaths_IT_52(t *testing.T) {
 				t.Errorf("%s map card missing status or integrity marker %q", name, want)
 			}
 		}
-		if strings.Contains(html, "fetch(") || strings.Contains(html, `method="post"`) {
-			t.Errorf("%s render gained write path", name)
-		}
+	}
+	if strings.Contains(static, "fetch(") || strings.Contains(static, `method="post"`) {
+		t.Error("static Render gained write path")
 	}
 	if strings.Contains(static, "EventSource") {
 		t.Fatal("static map gained live reload")
@@ -434,8 +435,11 @@ func TestStoryMapBoardAcceptance_AT_60(t *testing.T) {
 				t.Errorf("%s activated detail structure missing %q", name, want)
 			}
 		}
-		if strings.Contains(html, "<link ") || strings.Contains(html, "fetch(") {
-			t.Errorf("%s document not self-contained/read-only", name)
+		if strings.Contains(html, "<link ") {
+			t.Errorf("%s document not self-contained", name)
+		}
+		if name == "static" && strings.Contains(html, "fetch(") {
+			t.Error("static document not read-only")
 		}
 	}
 

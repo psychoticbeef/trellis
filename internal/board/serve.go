@@ -1,10 +1,14 @@
 package board
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,9 +23,92 @@ var pollInterval = time.Second
 // mount point (/ for the single board, /p/<id>/ for served boards).
 const reloadScript = `<script>new EventSource("events").onmessage = () => location.reload();</script>`
 
-// Handler serves the live board: GET / renders fresh from the engine on
-// every request (plus an auto-reload script), GET /events is an SSE stream
-// that ticks whenever the project's event log grows.
+// liveDragScript is injected only by live handlers and only when Render emitted
+// a story map. Static exports remain read-only and byte-for-byte unchanged.
+const liveDragScript = `<script>
+(function () {
+	var drag = null;
+	var errorBox = document.createElement('pre');
+	errorBox.setAttribute('role', 'alert');
+	errorBox.setAttribute('data-map-move-error', '');
+	errorBox.hidden = true;
+	var mapPanel = document.querySelector('[data-board-panel="map"]');
+	if (!mapPanel) return;
+	mapPanel.insertBefore(errorBox, mapPanel.firstChild);
+
+	function restore(state) {
+		if (state.next && state.next.parentNode === state.parent) state.parent.insertBefore(state.card, state.next);
+		else state.parent.appendChild(state.card);
+	}
+	function showError(message) {
+		errorBox.textContent = message;
+		errorBox.hidden = false;
+	}
+	function target(cell) {
+		if (!cell) return null;
+		var value = cell.getAttribute('data-map-cell') || '';
+		var split = value.lastIndexOf(':');
+		var slice = Number(value.slice(split + 1));
+		if (split < 1 || !Number.isInteger(slice) || slice < 1) return null;
+		return {activity_id: value.slice(0, split), slice: slice};
+	}
+
+	Array.prototype.forEach.call(mapPanel.querySelectorAll('.map-card'), function (card) {
+		card.draggable = true;
+		card.addEventListener('dragstart', function (event) {
+			drag = {card: card, parent: card.parentNode, next: card.nextSibling};
+			errorBox.hidden = true;
+			errorBox.textContent = '';
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', card.getAttribute('data-story-open'));
+		});
+		card.addEventListener('dragend', function () {
+			if (drag && drag.card === card) drag = null;
+		});
+	});
+	mapPanel.addEventListener('dragover', function (event) {
+		if (drag && target(event.target.closest('[data-map-cell]'))) event.preventDefault();
+	});
+	mapPanel.addEventListener('drop', function (event) {
+		var cell = event.target.closest('[data-map-cell]');
+		var destination = target(cell);
+		if (!drag || !destination) return;
+		event.preventDefault();
+		var current = drag;
+		drag = null;
+		current.card.draggable = false;
+		cell.appendChild(current.card);
+		fetch('map-position', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify({story_id: current.card.getAttribute('data-story-open'), activity_id: destination.activity_id, slice: destination.slice})
+		}).then(function (response) {
+			if (response.ok) return;
+			return response.text().then(function (text) {
+				var message = text;
+				try { var decoded = JSON.parse(text); if (typeof decoded.error === 'string') message = decoded.error; } catch (_) {}
+				throw new Error(message);
+			});
+		}).catch(function (error) {
+			restore(current);
+			current.card.draggable = true;
+			showError(error.message);
+		});
+	});
+}());
+</script>`
+
+func liveHTML(html string) string {
+	scripts := reloadScript
+	if strings.Contains(html, `data-board-panel="map"`) {
+		scripts = liveDragScript + reloadScript
+	}
+	return strings.Replace(html, "</body>", scripts+"</body>", 1)
+}
+
+// Handler serves one live board: GET / renders fresh with auto-reload,
+// GET /events streams event-log ticks, and POST /map-position applies
+// project-scoped story map placement through the engine.
 func Handler(e *core.Engine, st *store.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -35,11 +122,12 @@ func Handler(e *core.Engine, st *store.Store) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, strings.Replace(html, "</body>", reloadScript+"</body>", 1))
+		fmt.Fprint(w, liveHTML(html))
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		serveSSE(w, r, st, e.Project.ID)
 	})
+	mux.Handle("/map-position", mapPositionHandler(e))
 	return mux
 }
 
@@ -53,9 +141,9 @@ func Serve(e *core.Engine, st *store.Store, addr string) error {
 	return http.Serve(ln, Handler(e, st))
 }
 
-// MultiHandler serves every project's board from one store: / lists the
-// projects (or redirects when there is only one), /p/<id>/ renders that
-// project's board fresh per request, /p/<id>/events streams reload ticks.
+// MultiHandler serves every project's board from one store: / lists or
+// redirects, /p/<id>/ renders fresh, /p/<id>/events streams reload ticks,
+// and POST /p/<id>/map-position applies that project's story map placement.
 func MultiHandler(st *store.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -91,14 +179,70 @@ func MultiHandler(st *store.Store) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, strings.Replace(html, "</body>", reloadScript+"</body>", 1))
+			fmt.Fprint(w, liveHTML(html))
 		case "events":
 			serveSSE(w, r, st, id)
+		case "map-position":
+			mapPositionHandler(e).ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
 	})
 	return mux
+}
+
+type mapPositionRequest struct {
+	StoryID    string `json:"story_id"`
+	ActivityID string `json:"activity_id"`
+	Slice      int    `json:"slice"`
+}
+
+func mapPositionHandler(e *core.Engine) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method must be POST")
+			return
+		}
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mediaType != "application/json" {
+			writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Host != r.Host {
+				writeJSONError(w, http.StatusForbidden, "origin must match board host")
+				return
+			}
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var request mapPositionRequest
+		if err := decoder.Decode(&request); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid map-position request: "+err.Error())
+			return
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				err = fmt.Errorf("multiple JSON values")
+			}
+			writeJSONError(w, http.StatusBadRequest, "invalid map-position request: "+err.Error())
+			return
+		}
+		if _, err := e.SetMapPosition(request.StoryID, request.ActivityID, request.Slice); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func indexHTML(projects []store.Project) string {
