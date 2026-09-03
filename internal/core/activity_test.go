@@ -191,6 +191,6 @@ func TestActivityGuardsAndFreshness_IT_44(t *testing.T) {
 		t.Fatal(err)
 	}
 	if before.Story.Hash != after.Story.Hash || before.Story.Fresh != after.Story.Fresh || !reflect.DeepEqual(before.Integrity, after.Integrity) {
-		t.Fatalf("activity edit changed placed story integrity:\nbefore=%+v\nafter=%+v", before, after)
+		t.Fatalf("activity edit changed story content hash, approval freshness, or blocking problems:\nbefore=%+v\nafter=%+v", before, after)
 	}
 }

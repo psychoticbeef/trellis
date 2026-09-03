@@ -876,7 +876,7 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 	}
 	placed, err := st.GetNode("p9", a.story)
 	if err != nil || placed.ActivityID != activity.ID {
-		t.Fatalf("activity placement did not round trip: node=%+v err=%v", placed, err)
+		t.Fatalf("story placement did not round trip: node=%+v err=%v", placed, err)
 	}
 	activities, err := st.ListActivities("p9")
 	if err != nil || len(activities) != 1 || activities[0].Position != 3 {

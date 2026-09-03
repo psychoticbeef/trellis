@@ -62,7 +62,7 @@ func TestExportFormat_UT_26(t *testing.T) {
 		t.Fatalf("round trip diverged:\n--- original ---\n%s\n--- reimport ---\n%s", doc, doc2)
 	}
 	if !strings.Contains(doc, "activities:") || !strings.Contains(doc, "position: 0") || !strings.Contains(doc, "activity: UA-1") {
-		t.Fatalf("activity placement missing from export:\n%s", doc)
+		t.Fatalf("story placement missing from export:\n%s", doc)
 	}
 
 	// Counters preserved: new story and activity ids continue, never reuse.

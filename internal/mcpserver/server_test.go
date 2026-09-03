@@ -561,6 +561,18 @@ func renderBoard(t *testing.T, _ *mcp.ClientSession) string {
 	return html
 }
 
+func withoutBoardStamp(html string) string {
+	start := strings.Index(html, " · generated ")
+	if start < 0 {
+		return html
+	}
+	end := strings.Index(html[start:], "</p>")
+	if end < 0 {
+		return html
+	}
+	return html[:start] + html[start+end:]
+}
+
 // TestDescriptionAcceptance_AT_28 proves AT-28 (US-24 "Project
 // description") through MCP plus the rendered surfaces.
 func TestDescriptionAcceptance_AT_28(t *testing.T) {
@@ -959,23 +971,12 @@ func TestActivityBackboneAcceptance_AT_47_UT_47_IT_44(t *testing.T) {
 		}
 		return text(res)
 	}
-	normalizeBoardStamp := func(html string) string {
-		start := strings.Index(html, " · generated ")
-		if start < 0 {
-			return html
-		}
-		end := strings.Index(html[start:], "</p>")
-		if end < 0 {
-			return html
-		}
-		return html[:start] + html[start+end:]
-	}
 	baseline := map[string]string{
 		"get_overview": raw("get_overview", map[string]any{}),
 		"get_tree":     raw("get_tree", map[string]any{"story_id": story}),
 		"next_story":   raw("next_story", map[string]any{}),
 		"audit":        raw("audit", map[string]any{}),
-		"board":        normalizeBoardStamp(renderBoard(t, cs)),
+		"board":        withoutBoardStamp(renderBoard(t, cs)),
 	}
 	if strings.Contains(baseline["get_overview"], `"activities"`) {
 		t.Fatalf("overview without activity gained activities field: %s", baseline["get_overview"])
@@ -988,7 +989,7 @@ func TestActivityBackboneAcceptance_AT_47_UT_47_IT_44(t *testing.T) {
 		"get_tree":     raw("get_tree", map[string]any{"story_id": story}),
 		"next_story":   raw("next_story", map[string]any{}),
 		"audit":        raw("audit", map[string]any{}),
-		"board":        normalizeBoardStamp(renderBoard(t, cs)),
+		"board":        withoutBoardStamp(renderBoard(t, cs)),
 	}
 	for surface, want := range baseline {
 		if got := after[surface]; got != want {
@@ -1034,11 +1035,16 @@ func TestActivityReferenceAcceptance_AT_48_UT_47(t *testing.T) {
 
 	approveMCP(t, cs, story1)
 	before := call(t, cs, "get_tree", map[string]any{"story_id": story1})
+	boardBefore := withoutBoardStamp(renderBoard(t, cs))
 	call(t, cs, "update_node", map[string]any{"id": activity, "title": "Build products", "body": "new"})
 	after := call(t, cs, "get_tree", map[string]any{"story_id": story1})
+	boardAfter := withoutBoardStamp(renderBoard(t, cs))
 	beforeStory := before["story"].(map[string]any)
 	afterStory := after["story"].(map[string]any)
 	if beforeStory["content_hash"] != afterStory["content_hash"] || beforeStory["fresh"] != afterStory["fresh"] || fmt.Sprint(before["blocking_problems"]) != fmt.Sprint(after["blocking_problems"]) {
-		t.Fatalf("activity edit changed story integrity:\nbefore=%v\nafter=%v", before, after)
+		t.Fatalf("activity edit changed story content hash, approval freshness, or blocking problems:\nbefore=%v\nafter=%v", before, after)
+	}
+	if boardAfter != boardBefore {
+		t.Fatal("activity edit changed placed story integrity marker on board")
 	}
 }

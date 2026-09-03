@@ -61,7 +61,7 @@ func TestActivityStoreMetadata_UT_46(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stored.ActivityID != "UA-2" {
-		t.Fatalf("story activity placement lost: %+v", stored)
+		t.Fatalf("story placement lost: %+v", stored)
 	}
 	activities, err = st.ListActivities("p1")
 	if err != nil {

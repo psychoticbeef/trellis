@@ -390,8 +390,8 @@ func (s *Store) SetNodePosition(projectID, id string, position int) error {
 	return err
 }
 
-// SetStoryActivity persists story activity placement metadata. Engine exposure arrives with
-// story placement; backbone tests and import use this primitive directly.
+// SetStoryActivity persists story placement metadata. Backbone tests use this
+// primitive directly; engine exposure arrives with story placement.
 func (s *Store) SetStoryActivity(projectID, storyID, activityID string) error {
 	_, err := s.db.Exec(`UPDATE nodes SET activity_id=?, updated_at=? WHERE project_id=? AND id=? AND kind='story'`,
 		activityID, now(), projectID, storyID)
