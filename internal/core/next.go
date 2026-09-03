@@ -16,6 +16,14 @@ type BlockedStory struct {
 // NextStories splits the refined backlog into start candidates and stories
 // still waiting on sequencing dependencies — the same check start enforces.
 func (e *Engine) NextStories() ([]StorySummary, []BlockedStory, error) {
+	activities, err := e.st.ListActivities(e.pid())
+	if err != nil {
+		return nil, nil, err
+	}
+	knownActivities := make(map[string]bool, len(activities))
+	for _, activity := range activities {
+		knownActivities[activity.ID] = true
+	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {
 		return nil, nil, err
@@ -46,13 +54,31 @@ func (e *Engine) NextStories() ([]StorySummary, []BlockedStory, error) {
 			candidates = append(candidates, StorySummary{ID: s.ID, Title: s.Title, Status: s.Status})
 		}
 	}
-	byID := func(a, b string) bool {
-		if len(a) != len(b) {
-			return len(a) < len(b)
+	if len(activities) == 0 {
+		sort.Slice(candidates, func(i, j int) bool { return idLess(candidates[i].ID, candidates[j].ID) })
+	} else {
+		placements := make(map[string]model.Node, len(stories))
+		for _, story := range stories {
+			placements[story.ID] = story
 		}
-		return a < b
+		sort.Slice(candidates, func(i, j int) bool {
+			left, right := placements[candidates[i].ID], placements[candidates[j].ID]
+			leftPlaced, rightPlaced := storyHasPlacement(left, knownActivities), storyHasPlacement(right, knownActivities)
+			if leftPlaced != rightPlaced {
+				return leftPlaced
+			}
+			if !leftPlaced {
+				return idLess(left.ID, right.ID)
+			}
+			if left.Slice != right.Slice {
+				return left.Slice < right.Slice
+			}
+			if left.Rank != right.Rank {
+				return left.Rank < right.Rank
+			}
+			return idLess(left.ID, right.ID)
+		})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return byID(candidates[i].ID, candidates[j].ID) })
-	sort.Slice(blocked, func(i, j int) bool { return byID(blocked[i].ID, blocked[j].ID) })
+	sort.Slice(blocked, func(i, j int) bool { return idLess(blocked[i].ID, blocked[j].ID) })
 	return candidates, blocked, nil
 }
