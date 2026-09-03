@@ -10,6 +10,10 @@ project:
 glossary:
     - term: acceptance criterion
       definition: Structured given/when/then requirement on a story; every one must be covered by an acceptance test spec.
+    - term: activity
+      definition: Root node naming one user activity; ordered by position on the story map.
+    - term: activity approval check
+      definition: Placement requires target activity approved and fresh.
     - term: approval
       definition: Hash-proof that a reviewer read a node's current content; parents before children, dependencies re-pinned.
     - term: base branch
@@ -24,12 +28,26 @@ glossary:
       definition: 'A guard that must pass before a transition proceeds: structure, freshness, lint, tests, evidence, up-to-date branch.'
     - term: integrity marker
       definition: 'Story label: stale for invalidated approval, blocked for other integrity problems, fresh otherwise.'
+    - term: lane
+      definition: Stories sharing one activity and slice.
     - term: living context
       definition: Done specs stay editable so context tracks reality; honesty comes from stale markers, not locks.
+    - term: map complete
+      definition: At least one activity and no unmapped story; derived on every call, never stored.
+    - term: open slice
+      definition: Existing slice or next slice offered as placement candidate.
+    - term: placement
+      definition: A story's activity, rank and slice; metadata like paths, never hashed.
+    - term: placement gate
+      definition: 'While map complete: story creation without placement and set_map_position clearing placement reject; import and refine stay unchanged.'
+    - term: placement hint
+      definition: Transient story-creation guidance listing ranked activities and story map gaps.
     - term: prune
       definition: Hard delete of a done story's tree when its feature leaves the product; the only way spec content disappears.
     - term: sequencing link
       definition: 'Unpinned story-to-story dependency: start waits until the prerequisite story is done.'
+    - term: slice
+      definition: Integer release cut on the story map; soft priority for next_story, never a gate by itself.
     - term: spec tree
       definition: 'One story''s hierarchy: acceptance tests, exactly one arch spec, integration tests, detail designs, unit test specs.'
     - term: stale
@@ -38,20 +56,29 @@ glossary:
       definition: 'Unit of work: a spec tree plus the gated lifecycle todo -> refined -> in_progress -> done.'
     - term: story detail overlay
       definition: Read-only overlay showing complete story context.
+    - term: story map
+      definition: 'Optional 2D view: activities left to right, stories ranked below, slices across.'
+    - term: story map gap
+      definition: Empty activity-by-slice cell through highest used slice.
     - term: story worktree
       definition: Per-story git worktree under .trellis-worktrees/ where all implementation work happens.
     - term: token usage
       definition: Persisted per-story counts for main-agent and subagent tokens.
     - term: uncategorized token usage
       definition: Token usage stored only as main-agent and subagent totals.
+    - term: unmapped story
+      definition: Story without placement; legal only while the map is incomplete.
+    - term: walking skeleton
+      definition: Slice 1 with at least one story under every activity.
 counters:
-    AS: 42
-    AT: 46
-    CC: 4
-    DD: 45
-    IT: 42
-    US: 42
-    UT: 45
+    AS: 51
+    AT: 67
+    CC: 5
+    DD: 66
+    IT: 57
+    UA: 9
+    US: 51
+    UT: 67
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -94,6 +121,15 @@ counters:
     ac:US-40: 3
     ac:US-41: 5
     ac:US-42: 3
+    ac:US-43: 4
+    ac:US-44: 5
+    ac:US-45: 5
+    ac:US-46: 5
+    ac:US-47: 3
+    ac:US-48: 3
+    ac:US-49: 4
+    ac:US-50: 3
+    ac:US-51: 4
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -115,6 +151,66 @@ cross_cutting:
       title: Done specs are living context
       body: 'trellis keeps no obsolete content: no superseded states, no soft deletes, no archive. Done story trees are the durable context source and must track reality: they stay editable after done, so context is corrected in place instead of superseded. Honesty comes from hashes, not locks — every unreviewed change shows as a stale marker until someone re-reads and re-approves, and done stories are never reopened automatically. When a feature leaves the product, prune removes its tree whole.'
       approved_content_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
+    - id: CC-5
+      kind: cross_cutting
+      title: Story map, optional until complete
+      body: 'Placement data (activity, rank, slice) is never part of a content hash, never invalidates an approval, and never required while the map is incomplete. A project without activities behaves exactly as today in every tool, view, message and export: no extra output, no hints, no tabs, except doctor emits one informational story map suggestion at ten or more stories. Once map complete holds, the placement gate is active and no mutation may leave a story unmapped; the only way back is deleting every story and activity. Map state is derived from the data on every call; there is no flag and no config switch. Errors follow CC-2: exhaustive, listing every activity and open slice as candidates. Placement is settable via MCP (activity, slice) with rank appended automatically.'
+      approved_content_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+activities:
+    - id: UA-1
+      kind: activity
+      title: Set up project
+      body: User initializes project, configures scaffold, validates setup, installs hooks, and wires MCP.
+      position: 1
+      approved_content_hash: 4bea0b2238085d56f79b115b6ec93daec65c7b7aced87b0efdea0a5809899190
+    - id: UA-2
+      kind: activity
+      title: Specify
+      body: User defines stories, acceptance criteria, spec trees, cross-cutting specs, glossary terms, and project description.
+      position: 2
+      approved_content_hash: e5215f08ab3f66fc4ea15228ea89a1666b54aeee374bb6299bbf2e7c15483eab
+    - id: UA-3
+      kind: activity
+      title: Approve
+      body: User approves hashes, checks freshness, handles invalidation, and approves trees in batches.
+      position: 3
+      approved_content_hash: 23b48ecee819680573cf453f8c385dfaeba5b124018254970a6c871464ca7ab7
+    - id: UA-4
+      kind: activity
+      title: Plan
+      body: User sequences work, selects next story, manages story map placement, and applies planning gates.
+      position: 4
+      approved_content_hash: 7e9b110c481e48d5d8a504116faa82a5b28a775a207e13e390d074af6806d419
+    - id: UA-5
+      kind: activity
+      title: Implement
+      body: User advances state machine, works in isolated worktrees, runs commit-local gates, performs atomic mutations, and aborts work when needed.
+      position: 5
+      approved_content_hash: fa456138dbf8700f0dc178530d6ab55283e49c3e4e2ae55fac050fa8024882d1
+    - id: UA-6
+      kind: activity
+      title: Prove
+      body: User records test evidence, enforces merge gates, and verifies coverage.
+      position: 6
+      approved_content_hash: a55ec5a2c5d425413f577061a4025f1e202209185956b4ae7ec5a2a928cb86db
+    - id: UA-7
+      kind: activity
+      title: Inspect
+      body: User searches specs, traces paths, audits repository, and inspects board, overlays, drag-and-drop, and diagnostics.
+      position: 7
+      approved_content_hash: 26b9bea99187d3db9119a7007d23f1f8dfd6b272e13c285e8b9a49e3fed94149
+    - id: UA-8
+      kind: activity
+      title: Measure
+      body: User measures token usage by category and diagnoses overflow errors.
+      position: 8
+      approved_content_hash: 20168587d6000568730b2d4791afb80611e07a5f6d2e532687518e4442d32913
+    - id: UA-9
+      kind: activity
+      title: Release
+      body: User cuts releases, manages manifests and release authority, and exports or imports project data.
+      position: 9
+      approved_content_hash: b578bff0ba278b569430aafc41d8d7b4f3a9ac4820b650431eb64c26fa14dc19
 stories:
     - id: US-1
       kind: story
@@ -127,6 +223,11 @@ stories:
         - internal/core/matrix_test.go
         - internal/mcpserver/server.go
         - internal/mcpserver/server_test.go
+        - internal/model/model.go
+        - internal/model/model_test.go
+      activity: UA-2
+      rank: 1
+      slice: 1
       acceptance_criteria:
         - id: US-1.AC-1
           given: a project
@@ -164,8 +265,8 @@ stories:
                 - id: UT-1
                   kind: unit_test
                   title: Parent-kind matrix unit tests
-                  body: Unit-test the parent/child legality matrix for all seven kinds, the arch-singleton rule and id allocation monotonicity, directly against the engine with an in-memory store.
-                  approved_content_hash: e1f3ec64e710f9221b77de2eeafa85ae69f203af4d71d61a9511250e1c7fb948
+                  body: Unit-test the parent/child legality matrix for all eight kinds, including activity roots, the arch-singleton rule and id allocation monotonicity, directly against the engine with an in-memory store.
+                  approved_content_hash: 2eac2eae359c878eb90e87cfb309cc01fc1f1e4f1a4f610553ecb63120e9b845
                   approved_parent_hash: 83c8ddbeeb6c406918690c7472c6f33cb47c5afc2d6cc6d636a69ea2c2b1f24a
             - id: IT-1
               kind: integration_test
@@ -191,6 +292,9 @@ stories:
       paths:
         - internal/model/model.go
         - internal/model/model_test.go
+      activity: UA-2
+      rank: 2
+      slice: 1
       acceptance_criteria:
         - id: US-2.AC-1
           given: a story
@@ -250,6 +354,9 @@ stories:
       title: Hash-based approval and invalidation
       body: As the process owner I want every spec node explicitly approved against the exact content that was read, and every edit to invalidate dependent approvals, so that nothing enters development on stale understanding.
       status: done
+      activity: UA-3
+      rank: 1
+      slice: 1
       acceptance_criteria:
         - id: US-3.AC-1
           given: any node
@@ -316,6 +423,9 @@ stories:
       title: Cross-cutting architecture dependencies
       body: As an architect I keep cross-cutting decisions in root-level cross_cutting specs and reference them from story arch specs via hash-pinned links, so cross-cutting change forces every affected story to be re-reviewed without breaking the strict tree.
       status: done
+      activity: UA-2
+      rank: 3
+      slice: 1
       acceptance_criteria:
         - id: US-4.AC-1
           given: an unapproved cross_cutting spec
@@ -384,6 +494,9 @@ stories:
         - cmd/trellis/prune_test.go
         - internal/core/transition.go
         - internal/core/transition_test.go
+      activity: UA-5
+      rank: 1
+      slice: 1
       acceptance_criteria:
         - id: US-5.AC-1
           given: a story in any state
@@ -463,6 +576,9 @@ stories:
         - internal/mcpserver/gitflow_test.go
         - internal/testreport/junit.go
         - internal/testreport/junit_test.go
+      activity: UA-6
+      rank: 1
+      slice: 1
       acceptance_criteria:
         - id: US-6.AC-1
           given: a refined story and a clean worktree
@@ -547,6 +663,9 @@ stories:
       title: Abort transition
       body: 'As a development agent I want to abandon an in_progress story whose approach turned out wrong: discard the feature branch, return to the base branch, and fall back to refined so the spec survives while the work is dropped.'
       status: done
+      activity: UA-5
+      rank: 2
+      slice: 1
       acceptance_criteria:
         - id: US-10.AC-1
           given: an in_progress story with a clean worktree
@@ -606,6 +725,9 @@ stories:
       title: Story sequencing dependencies
       body: As a planner I want to declare that one story builds on another, so an agent cannot start dependent work before its prerequisite is done.
       status: done
+      activity: UA-4
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-11.AC-1
           given: two stories
@@ -672,6 +794,9 @@ stories:
       status: done
       paths:
         - internal/core/search.go
+      activity: UA-7
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-12.AC-1
           given: a populated spec database
@@ -733,6 +858,9 @@ stories:
       status: done
       paths:
         - internal/core/paths.go
+      activity: UA-7
+      rank: 2
+      slice: 2
       acceptance_criteria:
         - id: US-13.AC-1
           given: a story
@@ -804,6 +932,9 @@ stories:
       title: Test evidence on record
       body: As the process owner I want finish to record which tests proved each spec, and reports to show it, so hollow or gamed evidence is visible to anyone who looks.
       status: done
+      activity: UA-6
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-14.AC-1
           given: a finish run that passes
@@ -866,6 +997,9 @@ stories:
       paths:
         - internal/board/board.go
         - internal/board/board_test.go
+      activity: UA-9
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-15.AC-1
           given: a populated project
@@ -935,6 +1069,9 @@ stories:
       paths:
         - cmd/trellis/scaffold.go
         - cmd/trellis/scaffold_test.go
+      activity: UA-1
+      rank: 1
+      slice: 1
       acceptance_criteria:
         - id: US-16.AC-1
           given: a repo without trellis wiring
@@ -1006,6 +1143,9 @@ stories:
       title: Done trees are living context
       body: 'As the process owner I want done spec trees to stay editable so the context source tracks reality: corrections happen in place, honesty comes from stale markers and explicit re-approval, and done stories are never reopened automatically.'
       status: done
+      activity: UA-2
+      rank: 4
+      slice: 1
       acceptance_criteria:
         - id: US-8.AC-1
           given: a done story
@@ -1067,6 +1207,9 @@ stories:
       title: 'Merge gate: test what will merge'
       body: As the process owner I want finish to reject a feature branch that is behind the base branch, so the tests that gate the merge always ran on the exact content that lands in the base.
       status: done
+      activity: UA-6
+      rank: 2
+      slice: 1
       acceptance_criteria:
         - id: US-9.AC-1
           given: a base branch that advanced since the feature branch was created
@@ -1121,6 +1264,9 @@ stories:
       title: Worktree isolation
       body: As the process owner I want every in_progress story to live in its own git worktree so parallel stories cannot pull branches out from under each other, the main worktree stays parked on the base branch, and direct commits on the base branch are blocked.
       status: done
+      activity: UA-5
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-17.AC-1
           given: a refined story
@@ -1221,6 +1367,9 @@ stories:
       paths:
         - internal/board/serve.go
         - internal/board/serve_test.go
+      activity: UA-7
+      rank: 1
+      slice: 3
       acceptance_criteria:
         - id: US-18.AC-1
           given: a project
@@ -1251,8 +1400,8 @@ stories:
             - id: DD-19
               kind: detail_design
               title: Board HTTP server
-              body: 'internal/board: Serve(engine, store, addr) with handlers for / and /events; store gains MaxEventSeq(project); the served page embeds a tiny EventSource reload script.'
-              approved_content_hash: 20e195d0c2ebc1929efa72d085e86671621b503c61890afbfa475095b2f2aa57
+              body: 'internal/board: Serve(engine, store, addr) with live handlers for `/`, `/events`, and live-only extension routes; store provides MaxEventSeq(project); served page embeds a tiny EventSource reload script while static Render does not. Project-scoped story map mutation is added later by US-50 through `/map-position` and public Engine guards.'
+              approved_content_hash: 92e47a22c8185872df379fa5a22c99f45ed67cd0d6d70d6c34a82bb1a299e419
               approved_parent_hash: 9e3fc55e850500b51db407806c0b9fefb98b5fcb213690c01b68edd97e277569
               children:
                 - id: UT-19
@@ -1260,7 +1409,7 @@ stories:
                   title: Board server unit tests
                   body: Unit-test the SSE handler emitting on sequence growth, connection close handling, and that the reload script is absent from static Render output.
                   approved_content_hash: c94561a00e092ca92966ce58d14a009244ee52586abd2964588f67ac0ac4d8de
-                  approved_parent_hash: 20e195d0c2ebc1929efa72d085e86671621b503c61890afbfa475095b2f2aa57
+                  approved_parent_hash: 92e47a22c8185872df379fa5a22c99f45ed67cd0d6d70d6c34a82bb1a299e419
                   evidence:
                     tests:
                         - trellis/internal/board::TestBoardServerUnit_UT_19
@@ -1296,6 +1445,9 @@ stories:
       status: done
       paths:
         - internal/store/fts_test.go
+      activity: UA-7
+      rank: 3
+      slice: 2
       acceptance_criteria:
         - id: US-19.AC-1
           given: a populated project
@@ -1373,6 +1525,9 @@ stories:
       title: Gates run where the commit happens
       body: As a development agent I want the pre-commit and pre-push gates to execute in the worktree I am committing from, so the feedback I get reflects my own state, not the main worktree's.
       status: done
+      activity: UA-5
+      rank: 2
+      slice: 2
       acceptance_criteria:
         - id: US-20.AC-1
           given: a gate invocation from inside a story worktree of the project repo
@@ -1443,6 +1598,9 @@ stories:
         - internal/board/board.go
         - internal/board/board_test.go
         - internal/board/termify_test.go
+      activity: UA-2
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-21.AC-1
           given: a project
@@ -1522,6 +1680,9 @@ stories:
       paths:
         - internal/core/release.go
         - internal/core/release_test.go
+      activity: UA-9
+      rank: 2
+      slice: 2
       acceptance_criteria:
         - id: US-22.AC-1
           given: done features merged into the base branch since the last release
@@ -1598,6 +1759,9 @@ stories:
       title: Boards served by the MCP server
       body: 'As a human I want the board UI available whenever an agent session is connected: the MCP server also serves the boards of every project over HTTP — an index to click into the board I care about, or a direct redirect when there is only one.'
       status: done
+      activity: UA-7
+      rank: 4
+      slice: 2
       acceptance_criteria:
         - id: US-23.AC-1
           given: a starting MCP server (trellis serve)
@@ -1620,26 +1784,26 @@ stories:
         - id: AS-23
           kind: arch
           title: Multi-project board handler beside stdio
-          body: 'internal/board gains a store-backed multi-project handler: / lists or redirects, /p/<id>/ renders that project''s board fresh per request, /p/<id>/events streams its reload ticks; engines are created per request from the shared store. trellis serve starts it in a goroutine before the stdio loop; all board logging goes to stderr because stdout belongs to the MCP protocol; a bind failure degrades to a notice, never an exit. The reload script uses a relative events URL so the same page works at any mount point.'
+          body: 'internal/board provides a store-backed multi-project handler: `/` lists or redirects, `/p/<id>/` renders that project''s board fresh per request, `/p/<id>/events` streams reload ticks, and live-only extension routes remain scoped below `/p/<id>/`; engines are created per request from the shared store. US-50 adds `/p/<id>/map-position` through public Engine.SetMapPosition. trellis serve starts HTTP in a goroutine before the stdio loop; all board logging goes to stderr because stdout belongs to MCP protocol; bind failure degrades to a notice, never an exit. Relative live URLs keep pages working at any mount point.'
           depends_on:
             - target: CC-1
               pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
-          approved_content_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+          approved_content_hash: a02cb9759cc6344b11b22da566af649c3cae0c2cf3309d8fcee6b2664a9fc1ac
           approved_parent_hash: be9d32b4f226aff86fce02ae7ce77c3a2ca7fb8124a99ae528aafe3e1aa3a4ac
           children:
             - id: DD-24
               kind: detail_design
               title: MultiHandler and serve wiring
-              body: 'board.MultiHandler(st): routes /, /p/{id}/, /p/{id}/events; index template on the board tokens; redirect for a single project; engines per request. cmd serve: --board-addr flag (default 127.0.0.1:7420, off disables), net.Listen + goroutine before srv.Run, stderr notices. reloadScript switches to a relative events URL shared with the single-board server.'
-              approved_content_hash: b02e913923e41a6cac9ef2a71d979de30f95b696b28feabfd550e7900e33c859
-              approved_parent_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+              body: 'board.MultiHandler(st) routes `/`, `/p/{id}/`, `/p/{id}/events`, and project-scoped live-only extension routes; index template uses board tokens; one project redirects; engines are created per request. US-50 supplies POST `/p/{id}/map-position` with JSON placement input and public Engine.SetMapPosition. cmd serve: --board-addr flag (default 127.0.0.1:7420, off disables), net.Listen plus goroutine before srv.Run, stderr notices. Relative live URLs are shared with single-board server.'
+              approved_content_hash: e950f5976744bb9a0b8ef2e01f43f52da7160cd7cc07dfd5afb90dbfd40f72ba
+              approved_parent_hash: a02cb9759cc6344b11b22da566af649c3cae0c2cf3309d8fcee6b2664a9fc1ac
               children:
                 - id: UT-24
                   kind: unit_test
                   title: MultiHandler unit tests
                   body: Unit-test the index rendering (names, links, escaping), the single-project redirect, unknown-id 404, and that the reload script's events URL is relative.
                   approved_content_hash: dada0fa29188cbdb0096ecd398abb00b5d82c7a47575fc560a59e8b479d8a4d1
-                  approved_parent_hash: b02e913923e41a6cac9ef2a71d979de30f95b696b28feabfd550e7900e33c859
+                  approved_parent_hash: e950f5976744bb9a0b8ef2e01f43f52da7160cd7cc07dfd5afb90dbfd40f72ba
                   evidence:
                     tests:
                         - trellis/internal/board::TestMultiHandlerUnit_UT_24
@@ -1649,7 +1813,7 @@ stories:
               title: Multi-board handler integration
               body: 'Handler against a store with one and several projects via httptest: redirect vs index, per-project rendering and SSE ticks, 404 for unknown project ids.'
               approved_content_hash: 66620f388ce78a57fd7b158395b2d42f5c73e180b3f7d03fcffb84f3aa298e63
-              approved_parent_hash: de1d2f8965e40fd23e644a702d1a17e93b07f4aa35197f0390c1f251f00f8f46
+              approved_parent_hash: a02cb9759cc6344b11b22da566af649c3cae0c2cf3309d8fcee6b2664a9fc1ac
               evidence:
                 tests:
                     - trellis/internal/board::TestMultiBoardIntegration_IT_23
@@ -1674,6 +1838,9 @@ stories:
       title: Project description
       body: 'As a team I want a GitHub-style one-line project description that reaches every context surface: the agent''s overview, the board header, the boards index and the release manifest.'
       status: done
+      activity: UA-2
+      rank: 2
+      slice: 2
       acceptance_criteria:
         - id: US-24.AC-1
           given: a project
@@ -1749,11 +1916,16 @@ stories:
       paths:
         - internal/core/export.go
         - internal/core/export_test.go
+        - internal/core/transition_test.go
+        - cmd/trellis/prune_test.go
+      activity: UA-9
+      rank: 3
+      slice: 2
       acceptance_criteria:
         - id: US-25.AC-1
           given: a project
           when: the human runs trellis export
-          then: a human-readable YAML document is written containing project config and description, glossary, id counters, cross-cutting specs and full story trees with acceptance criteria, covers, paths, dependency pins, approval hashes, status and evidence
+          then: a human-readable YAML document is written containing project config and description, glossary, id counters, cross-cutting specs, ordered activities with positions, and full story trees with placement metadata, acceptance criteria, covers, paths, dependency pins, approval hashes, status and evidence
         - id: US-25.AC-2
           given: a release
           when: it completes
@@ -1766,33 +1938,33 @@ stories:
           given: an imported project
           when: it is exported again
           then: the export equals the original one apart from project identity — the backup is proven faithful (round trip)
-      approved_content_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+      approved_content_hash: b51abe98a9b040c0a127dc7f0b18512eefe9f6563daf9c13266afb5ad780939f
       children:
         - id: AS-25
           kind: arch
           title: One YAML document, nested like the spec tree
-          body: Export renders one YAML document (gopkg.in/yaml.v3) with stories as nested trees — the human-readable shape mirrors the composition tree. Approval hashes are exported verbatim (content hashes recompute identically from content), counters ship along so imported projects never reuse ids, the event log stays out (flight recorder, not state). Import creates a fresh project and refuses unknown format versions.
+          body: Export renders one YAML document (gopkg.in/yaml.v3) with cross-cutting specs and position-ordered activities as roots plus stories nested like the composition tree. Activity positions and story placement metadata are additive optional fields. Approval hashes are exported verbatim (content hashes recompute identically from content), counters ship along so imported projects never reuse ids, the event log stays out (flight recorder, not state). Import creates a fresh project and refuses unknown format versions.
           depends_on:
             - target: CC-1
               pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
             - target: CC-4
               pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
-          approved_content_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
-          approved_parent_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+          approved_content_hash: e7b5523fd2266f9d9b6c48bebd76bcecc3db11d13cec07bd40c742d95908e071
+          approved_parent_hash: b51abe98a9b040c0a127dc7f0b18512eefe9f6563daf9c13266afb5ad780939f
           children:
             - id: DD-26
               kind: detail_design
               title: Export document and importer
-              body: 'core/export: yaml types mirroring nodes/ACs/deps/evidence with a trellis_export version field; Engine.ExportYAML walks cross-cutting specs then story trees; Import(st, data, project) inserts via the store preserving approval columns and counters; release writes trellis-specs.yaml next to FEATURES.md; CLI: export [-o], import -f --name --repo.'
-              approved_content_hash: 62866dd0894298993ded76cf6441252ca60e4982cdae039c1ff91987f75b797d
-              approved_parent_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
+              body: 'core/export: yaml types mirroring activities, nodes, ACs, deps, evidence and placement metadata with a trellis_export version field; Engine.ExportYAML walks cross-cutting specs, position-ordered activities, then story trees; Import(st, data, project) inserts via the store preserving activity positions, placement metadata, approval columns and counters; release writes trellis-specs.yaml next to FEATURES.md; CLI: export [-o], import -f --name --repo.'
+              approved_content_hash: 8be6da1bef30f89307952f58b892586ad4e570c06ebee0537be8cff85270522d
+              approved_parent_hash: e7b5523fd2266f9d9b6c48bebd76bcecc3db11d13cec07bd40c742d95908e071
               children:
                 - id: UT-26
                   kind: unit_test
                   title: Export format unit tests
-                  body: Unit-test yaml round-tripping of hostile content (multiline bodies, unicode, quotes), version rejection, and counter preservation.
-                  approved_content_hash: 7ec2972ecda3f1c9683c05a4ef251481d824f93a428beef1c7fc05bd663d1b35
-                  approved_parent_hash: 62866dd0894298993ded76cf6441252ca60e4982cdae039c1ff91987f75b797d
+                  body: Unit-test yaml round-tripping of hostile content (multiline bodies, unicode, quotes), ordered activities, explicit zero position, story placement metadata, omitted empty map fields, version rejection, and counter preservation.
+                  approved_content_hash: 0c906c0c08b0aff68893b1639f91a595314428d2cc081d0d09bc7c0c99ab42ac
+                  approved_parent_hash: 8be6da1bef30f89307952f58b892586ad4e570c06ebee0537be8cff85270522d
                   evidence:
                     tests:
                         - trellis/internal/core::TestExportFormat_UT_26
@@ -1800,9 +1972,9 @@ stories:
             - id: IT-25
               kind: integration_test
               title: YAML export and import integration
-              body: 'Store + engine: full round trip over a maximally populated project incl. sequencing links, cross-tree pins, evidence and counters; release file presence; unknown-version rejection.'
-              approved_content_hash: 65d151a308621dacc2aae759ab20098c985a6f85a8e1a047028ad7e37f853753
-              approved_parent_hash: b2feeea03e45f05a695e7026073b319c0f32ec365f21234069181b2019dab223
+              body: 'Store + engine: full round trip over a maximally populated project incl. ordered activities, story placement metadata, sequencing links, cross-tree pins, evidence and counters; release file presence; unknown-version rejection.'
+              approved_content_hash: fcd5ece59334facdf5bace2743f7f2dc19edba6eba11dafcf7bed23118955718
+              approved_parent_hash: e7b5523fd2266f9d9b6c48bebd76bcecc3db11d13cec07bd40c742d95908e071
               evidence:
                 tests:
                     - trellis/internal/core::TestExportImportIntegration_IT_25
@@ -1810,14 +1982,14 @@ stories:
         - id: AT-29
           kind: acceptance_test
           title: Export/import acceptance
-          body: 'Drive the real CLI entrypoint: export a populated project (deps, evidence, glossary, paths, done stories), import it as a new project, export again and assert the round trip; assert approvals and statuses survived and new ids continue after the imported counters; assert a release commits trellis-specs.yaml on the release branch.'
+          body: 'Drive the real CLI entrypoint: export a populated project (activities, placement metadata, deps, evidence, glossary, paths, done stories), import it as a new project, export again and assert the round trip; assert approvals and statuses survived and new story and activity ids continue after the imported counters; assert a release commits trellis-specs.yaml on the release branch.'
           covers:
             - US-25.AC-1
             - US-25.AC-2
             - US-25.AC-3
             - US-25.AC-4
-          approved_content_hash: bf4a6f1c1d6eb4e302168f61dfb5fdcb85dc368bf3d81dfcf9b7c129a9812b3c
-          approved_parent_hash: 948e21d838edf7a6a937e38f320b960bbaae170d722ac11eee50df9505453ab5
+          approved_content_hash: ffe3264fe6fe436919f968eb42c1f86f099e7eeab7dc20ae97ede82acd63f62d
+          approved_parent_hash: b51abe98a9b040c0a127dc7f0b18512eefe9f6563daf9c13266afb5ad780939f
           evidence:
             tests:
                 - trellis/cmd/trellis::TestExportImportCLIAcceptance_AT_29
@@ -1829,6 +2001,9 @@ stories:
       status: done
       paths:
         - internal/core/batchapprove.go
+      activity: UA-3
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-26.AC-1
           given: a story tree
@@ -1908,6 +2083,9 @@ stories:
       paths:
         - internal/store/lock.go
         - internal/store/lock_test.go
+      activity: UA-5
+      rank: 3
+      slice: 2
       acceptance_criteria:
         - id: US-27.AC-1
           given: two sessions mutating the same project
@@ -1988,6 +2166,9 @@ stories:
         - internal/board/board.go
         - internal/board/board_test.go
         - cmd/trellis/prune_test.go
+      activity: UA-7
+      rank: 2
+      slice: 3
       acceptance_criteria:
         - id: US-28.AC-1
           given: a rendered board
@@ -2023,8 +2204,8 @@ stories:
                 - id: UT-29
                   kind: unit_test
                   title: Kanban rendering unit tests
-                  body: Unit-test card escaping, empty-board rendering, exactly one story detail overlay script per page, one card control per story, story-prefixed overlay ids, and absence of inline detail content inside compact cards.
-                  approved_content_hash: 611edc62f775d5945c7f09092215c08082f4afbb80b2c1c5f6d76b91be598de6
+                  body: Unit-test card escaping, empty-board rendering, exactly one story detail overlay script per page, one kanban card control per story and, when a story map exists, an additional map card control targeting the same story detail overlay, story-prefixed overlay ids, and absence of inline detail content inside compact cards.
+                  approved_content_hash: 69bc329da090f6cd9f2ec403c0b7f91a8e56b8b24bf6c3290853253749fd52a0
                   approved_parent_hash: 24353fe6216d5cad5564dae06d024558616b2570319736aff1eaf96be91764a4
                   evidence:
                     tests:
@@ -2059,6 +2240,9 @@ stories:
       title: Init wires and commits its own scaffold
       body: 'As a human bootstrapping a repo I want trellis init to leave a working setup behind in one step: wiring files committed by init itself, the worktree ignore line in place, and a warning when the trellis binary is not reachable where hooks and MCP config will look for it. Found while bootstrapping the first foreign project: hooks failed off-PATH and the fresh branch gate blocked the manual scaffold commit.'
       status: done
+      activity: UA-1
+      rank: 1
+      slice: 2
       acceptance_criteria:
         - id: US-29.AC-1
           given: a git repository being initialized
@@ -2137,6 +2321,9 @@ stories:
       status: done
       paths:
         - internal/mcpserver/envelope_test.go
+      activity: UA-1
+      rank: 2
+      slice: 2
       acceptance_criteria:
         - id: US-30.AC-1
           given: a strict MCP client validating tools/list
@@ -2208,6 +2395,9 @@ stories:
       title: Release commits carry trellis authority
       body: 'Found releasing the first foreign project: the release manifest commit ran through the freshly scaffolded pre-commit hooks and was blocked by the lint gate in the main worktree. Release commits are trellis-authored — like init and finish they must bypass the hooks trellis itself installed; and a failed release must not strand staged manifest files on the base branch.'
       status: done
+      activity: UA-9
+      rank: 4
+      slice: 2
       acceptance_criteria:
         - id: US-31.AC-1
           given: a repo with trellis-scaffolded hooks
@@ -2278,6 +2468,9 @@ stories:
         - internal/testreport/coverage.go
         - internal/testreport/coverage_test.go
         - internal/board/board.go
+      activity: UA-6
+      rank: 1
+      slice: 3
       acceptance_criteria:
         - id: US-32.AC-1
           given: a project with coverage_glob configured
@@ -2357,6 +2550,9 @@ stories:
       paths:
         - internal/core/audit.go
         - internal/core/audit_test.go
+      activity: UA-7
+      rank: 3
+      slice: 3
       acceptance_criteria:
         - id: US-33.AC-1
           given: a project with done stories
@@ -2436,6 +2632,9 @@ stories:
       paths:
         - cmd/trellis/doctor.go
         - cmd/trellis/doctor_test.go
+      activity: UA-1
+      rank: 1
+      slice: 3
       acceptance_criteria:
         - id: US-34.AC-1
           given: a wired repository
@@ -2454,11 +2653,11 @@ stories:
         - id: AS-34
           kind: arch
           title: Checks shared with the scaffolder
-          body: doctor reuses the scaffold building blocks (hook templates, ignore ensure, wiring templates) so 'current generation' is by construction whatever scaffold writes today; checks are pure functions over repo+ config returning ok/warn/fail findings, --fix maps each trellis-owned failure to its scaffold writer.
+          body: doctor reuses the scaffold building blocks (hook templates, ignore ensure, wiring templates) so 'current generation' is by construction whatever scaffold writes today; checks are pure functions over repo+ config returning ok/warn/fail findings, while read-only contextual diagnostics may append info findings; --fix maps each trellis-owned failure to its scaffold writer.
           depends_on:
             - target: CC-2
               pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
-          approved_content_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+          approved_content_hash: 8308b4381ab0ad1978f0b4b8373d5df1e7b463ac1153e87e117e631c1a938d5d
           approved_parent_hash: a33811fc8ed5d5a37291d842328ee9403bdc5a8c9ef05e7ae85749a6f90a0bdd
           children:
             - id: DD-35
@@ -2466,7 +2665,7 @@ stories:
               title: Doctor checks and fixers
               body: 'cmd/trellis: doctorChecks(project, repo) []finding{name, level, hint, fixable}; hook currency = contains the branch-gate line the template carries; cmdDoctor prints the table, --fix reruns scaffold writers for fixable findings.'
               approved_content_hash: d8a33f46cc4a832f4a166c7190cf922e7c05354806c1303f22c395e0618dc83a
-              approved_parent_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+              approved_parent_hash: 8308b4381ab0ad1978f0b4b8373d5df1e7b463ac1153e87e117e631c1a938d5d
               children:
                 - id: UT-35
                   kind: unit_test
@@ -2481,9 +2680,9 @@ stories:
             - id: IT-34
               kind: integration_test
               title: Setup doctor integration
-              body: CLI + repos in every drift state incl. an old-generation pre-commit hook (no branch gate) being detected and rewritten; a fully healthy repo yields all-ok and exit 0.
-              approved_content_hash: 6a08341ecc9a4576cdaf96a9983a9a1f270c7d30b8d0b47061c045d480c6f917
-              approved_parent_hash: 3e79e8c1a9443653191cb91792f1a94563ebbdad5c777355d8ee9cf005c5596d
+              body: CLI + repos in every drift state incl. an old-generation pre-commit hook (no branch gate) being detected and rewritten; a fully healthy repo yields all setup checks as ok, permits additional informational diagnostics, and exits 0.
+              approved_content_hash: ad65849960bf19915c14a902f1131ac5d6322f71f3a2ebcb85a8d7cd3528294a
+              approved_parent_hash: 8308b4381ab0ad1978f0b4b8373d5df1e7b463ac1153e87e117e631c1a938d5d
               evidence:
                 tests:
                     - trellis/cmd/trellis::TestDoctorIntegration_IT_34
@@ -2509,11 +2708,14 @@ stories:
       status: done
       paths:
         - internal/core/next.go
+      activity: UA-4
+      rank: 1
+      slice: 3
       acceptance_criteria:
         - id: US-35.AC-1
           given: refined stories whose sequencing dependencies are all done
           when: next is asked
-          then: they are listed as start candidates ordered by story id, with title
+          then: ready candidates are returned first, ordered by story id without a story map or by slice, rank and story id with a story map, and every blocked refined story is returned separately with all unfinished dependencies
         - id: US-35.AC-2
           given: refined stories blocked by unfinished sequencing dependencies
           when: next is asked
@@ -2522,7 +2724,7 @@ stories:
           given: no refined story at all
           when: next is asked
           then: the answer says so explicitly; CLI (trellis next) and MCP tool return the same data
-      approved_content_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+      approved_content_hash: 77b2186da00505535df06f2d64c01b082a523609283fef128bcfb5ce2aae4031
       children:
         - id: AS-35
           kind: arch
@@ -2532,7 +2734,7 @@ stories:
             - target: CC-2
               pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
           approved_content_hash: b0ddd95f99090ce9ac76c2a951f8434b02a199ebfd0ac9d32e5deaae49972fa1
-          approved_parent_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+          approved_parent_hash: 77b2186da00505535df06f2d64c01b082a523609283fef128bcfb5ce2aae4031
           children:
             - id: DD-36
               kind: detail_design
@@ -2570,7 +2772,7 @@ stories:
             - US-35.AC-2
             - US-35.AC-3
           approved_content_hash: f6c21e77450665fe4c7172a03f7a74b4f78e0c2efc48136ca67f8d7079538434
-          approved_parent_hash: c74416f5c1fbd1c9885ab128045815e718125d7854f1a34ecb8d1360ae44b5f4
+          approved_parent_hash: 77b2186da00505535df06f2d64c01b082a523609283fef128bcfb5ce2aae4031
           evidence:
             tests:
                 - trellis/internal/mcpserver::TestNextAcceptance_AT_39
@@ -2580,6 +2782,9 @@ stories:
       title: Coverage delta
       body: 'As a team we want each coverage snapshot to say how it moved: one scalar of memory, no history — enough to notice erosion.'
       status: done
+      activity: UA-6
+      rank: 2
+      slice: 3
       acceptance_criteria:
         - id: US-36.AC-1
           given: a previous coverage snapshot
@@ -2660,6 +2865,9 @@ stories:
         - internal/store/store.go
         - internal/store/usage.go
         - internal/store/usage_test.go
+      activity: UA-8
+      rank: 1
+      slice: 3
       acceptance_criteria:
         - id: US-37.AC-1
           given: an existing story with previous tokens_main and tokens_subagents
@@ -2772,6 +2980,9 @@ stories:
         - cmd/trellis/prune_test.go
         - internal/mcpserver/server.go
         - internal/mcpserver/server_test.go
+      activity: UA-7
+      rank: 4
+      slice: 3
       acceptance_criteria:
         - id: US-38.AC-1
           given: a repository contains at least one unclaimed non-meta file
@@ -2855,6 +3066,9 @@ stories:
         - internal/store/store.go
         - internal/store/usage.go
         - internal/store/usage_test.go
+      activity: UA-8
+      rank: 2
+      slice: 3
       acceptance_criteria:
         - id: US-39.AC-1
           given: a story with existing token usage
@@ -2964,6 +3178,9 @@ stories:
         - internal/core/usage_test.go
         - internal/store/usage.go
         - internal/store/usage_test.go
+      activity: UA-8
+      rank: 3
+      slice: 3
       acceptance_criteria:
         - id: US-40.AC-1
           given: an existing story with one or more token usage counters near MaxInt64
@@ -3043,6 +3260,9 @@ stories:
         - internal/board/story_detail_test.go
         - cmd/trellis/prune_test.go
         - cmd/trellis/story_detail_test.go
+      activity: UA-7
+      rank: 5
+      slice: 3
       acceptance_criteria:
         - id: US-41.AC-1
           given: a rendered board with stories in multiple lifecycle statuses
@@ -3061,36 +3281,36 @@ stories:
           when: the board is rendered
           then: the overview, embedded story detail data, CSS, and modal JavaScript are contained in one self-contained HTML file without external dependencies; static export behavior remains unchanged and SSE reload still reveals changes automatically
         - id: US-41.AC-5
-          given: the board overview or story detail overlay
-          when: the human operates the UI
-          then: the UI offers no create, edit, transition, approval, or other mutation and sends no write operation to trellis
-      approved_content_hash: 1bbce56d5017ea38139528c8acfcec22c3215a86e818f8e0f3578f5630132c0f
+          given: the kanban board overview or story detail overlay
+          when: the human operates those surfaces
+          then: those surfaces offer no create, edit, transition, approval, placement, or other mutation and send no write operation to trellis; live-only Map tab capability is outside those surfaces.
+      approved_content_hash: 81c7b66ca1b7b99884e468734e171316567abeb08166511a736a5bfcb4ec68a4
       children:
         - id: AS-41
           kind: arch
           title: Embedded read-only story details over compact kanban
-          body: Render one self-contained HTML document from existing engine Overview, Tree, and Node reports. Kanban cards contain only story id, title, deterministic integrity marker, and shared compact token usage. Marker precedence is stale when any spec-tree approval is invalidated; otherwise blocked when integrity problems exist, including never-approved nodes; otherwise fresh. Complete story data remains embedded in inert story detail overlay markup and is revealed by dependency-free JavaScript; coverage, glossary, and cross-cutting specs move into a separate hidden project context overlay. No UI mutation path exists. Static export, single-project --serve, and multi-project MCP board handlers continue using the same Render path, while existing SSE reload remains unchanged.
+          body: Render one self-contained HTML document from existing engine Overview, Tree, and Node reports. Kanban cards contain only story id, title, deterministic integrity marker, and shared compact token usage. Marker precedence is stale when any spec-tree approval is invalidated; otherwise blocked when integrity problems exist, including never-approved nodes; otherwise fresh. Complete story data remains embedded in inert story detail overlay markup and is revealed by dependency-free JavaScript; coverage, glossary, and cross-cutting specs live in separate hidden project context overlay. Shared Render, kanban overview, story detail overlay, and static export contain no UI mutation path. Single-project --serve and multi-project MCP board handlers use same Render path and may inject separate live-only Map capability; existing SSE reload remains unchanged.
           depends_on:
             - target: CC-1
               pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
             - target: CC-4
               pinned_hash: e01e58b15446c1374ab40efa97c8e1a3fba3a4cb276bac96d2c7ecd6268e0c08
-          approved_content_hash: ffdf1d5e6265ebacb8981049eba89f718bc7eb11627dc5360001a3137928c023
-          approved_parent_hash: 1bbce56d5017ea38139528c8acfcec22c3215a86e818f8e0f3578f5630132c0f
+          approved_content_hash: 8cc4c8644fc827284b97c632fa1b6050801ed33e9f90a1102861c6480744dd9f
+          approved_parent_hash: 81c7b66ca1b7b99884e468734e171316567abeb08166511a736a5bfcb4ec68a4
           children:
             - id: DD-44
               kind: detail_design
               title: Compact cards and accessible story detail overlay
-              body: internal/board page views expose one card integrity marker and complete story detail data. Replace inline story details and hash navigation with buttons linked to hidden story detail overlays. Embedded JavaScript opens selected story detail overlay, makes board overview inert, traps Tab focus, closes through close control, backdrop click, or Escape, restores focus to card, reveals linked dependency and glossary targets in their owning overlay, and contains no fetch or mutation code. Coverage, glossary, and cross-cutting specs move into a hidden project context overlay. CSS keeps lifecycle columns and bounded, scrollable story detail overlay layout responsive with a mobile backdrop gutter. Remove external font loading so generated HTML contains all required CSS, markup, and JavaScript.
-              approved_content_hash: 0df0c8ad2ca6eb1ff20544172d331d6ff5d83c563e373685a6586d55d9066f85
-              approved_parent_hash: ffdf1d5e6265ebacb8981049eba89f718bc7eb11627dc5360001a3137928c023
+              body: internal/board page views expose one card integrity marker and complete story detail data. Compact overview cards link to hidden story detail overlays. Embedded Render JavaScript opens selected story detail overlay, makes board overview inert, traps Tab focus, closes through close control, backdrop click, or Escape, restores focus to card, reveals linked dependency and glossary targets in their owning overlay, and contains no fetch or mutation code. Coverage, glossary, and cross-cutting specs live in hidden project context overlay. CSS keeps lifecycle columns and bounded, scrollable story detail overlay layout responsive with a mobile backdrop gutter. Generated Render HTML contains all required CSS, markup, and JavaScript; live handlers may inject separate self-contained Map capability.
+              approved_content_hash: b01643bd71c0ca434fb4c345d14a8b598d0e36401517b57df4cb9f7e3fda4559
+              approved_parent_hash: 8cc4c8644fc827284b97c632fa1b6050801ed33e9f90a1102861c6480744dd9f
               children:
                 - id: UT-44
                   kind: unit_test
                   title: Board overview and story detail unit tests
-                  body: Unit-test lifecycle column order, exact compact card fields, integrity marker precedence where stale means invalidated approval and blocked includes never-approved nodes, absence of inline detail content from compact cards and kanban overview, complete escaped story detail data including given/when/then acceptance criteria, full spec tree freshness, declared paths, categorized token usage, and test evidence, plus close-control, mobile backdrop, Escape, inert background, Tab focus trap, dependency-link revelation hooks, and absence of external resources or mutation code.
-                  approved_content_hash: 6d39733427fb422f19657e452316ec0898867156e07fd7c0899c28c9eb6606dc
-                  approved_parent_hash: 0df0c8ad2ca6eb1ff20544172d331d6ff5d83c563e373685a6586d55d9066f85
+                  body: Unit-test lifecycle column order, exact compact overview card fields, integrity marker precedence where stale means invalidated approval and blocked includes never-approved nodes, absence of inline detail content and write actions from kanban overview, complete escaped story detail data including given/when/then acceptance criteria, full spec tree freshness, declared paths, categorized token usage, and test evidence, plus close-control, mobile backdrop, Escape, inert background, Tab focus trap, dependency-link revelation hooks, and absence of external resources or mutation code in shared Render.
+                  approved_content_hash: e56e01ce260de307931c8fbb056faf0c7b47618d4461fe34a7f2e45be6fead97
+                  approved_parent_hash: b01643bd71c0ca434fb4c345d14a8b598d0e36401517b57df4cb9f7e3fda4559
                   evidence:
                     tests:
                         - trellis/internal/board::TestBoardOverviewAndOverlay_UT_44
@@ -3098,9 +3318,9 @@ stories:
             - id: IT-41
               kind: integration_test
               title: Static and served story detail integration
-              body: Render a populated engine through static Render, single-project server, and multi-project MCP board handler. Assert matching compact overview and embedded story detail data, complete story data, hidden project context, dependency-free assets, and unchanged relative SSE endpoint/reload behavior while no UI write endpoint or write operation exists.
-              approved_content_hash: 4778a01659429d53527e26e57c6ff04e3cb09feaeac3fb24de628e37517cf4a2
-              approved_parent_hash: ffdf1d5e6265ebacb8981049eba89f718bc7eb11627dc5360001a3137928c023
+              body: Render a populated engine through static Render, single-project server, and multi-project MCP board handler. Assert matching compact kanban overview and embedded story detail data, complete story data, hidden project context, dependency-free shared assets, and unchanged relative SSE endpoint/reload behavior. Assert static Render, kanban overview, and story detail overlay expose no UI write action; later live-only Map augmentation remains separate.
+              approved_content_hash: 00c54f52526db66d3a04838d02b3a5ea27100d5384c1016b852db2fd431f66ff
+              approved_parent_hash: 8cc4c8644fc827284b97c632fa1b6050801ed33e9f90a1102861c6480744dd9f
               evidence:
                 tests:
                     - trellis/internal/board::TestStaticAndServedStoryDetail_IT_41
@@ -3108,15 +3328,15 @@ stories:
         - id: AT-45
           kind: acceptance_test
           title: Board overview and story detail acceptance
-          body: Drive real board CLI static export and --serve against a project containing fresh, stale, and blocked stories across multiple lifecycle statuses, declared paths, categorized token usage, acceptance criteria, a complete spec tree, and evidence. Parse emitted HTML and assert lifecycle column order, compact card contents and integrity markers, complete bounded, scrollable story detail overlay data, close-control/backdrop/Escape hooks, inert background and focus-trap hooks, self-contained resources, no write actions, and live SSE reload revealing changed story data.
+          body: Drive real board CLI static export and --serve against a project containing fresh, stale, and blocked stories across multiple lifecycle statuses, declared paths, categorized token usage, acceptance criteria, a complete spec tree, and evidence. Parse emitted HTML and assert lifecycle column order, compact overview card contents and integrity markers, complete bounded, scrollable story detail overlay data, close-control/backdrop/Escape hooks, inert background and focus-trap hooks, self-contained resources, no write actions from kanban overview or story detail overlay, and live SSE reload revealing changed story data. Separate live-only Map capability is outside this acceptance scope.
           covers:
             - US-41.AC-1
             - US-41.AC-2
             - US-41.AC-3
             - US-41.AC-4
             - US-41.AC-5
-          approved_content_hash: e5992f42badbac78ed611b03107e84d235a5507fef6ea99a8757315a4aa5d83e
-          approved_parent_hash: 1bbce56d5017ea38139528c8acfcec22c3215a86e818f8e0f3578f5630132c0f
+          approved_content_hash: ef60eecca11267592bdaa3449546be46b204381d9ddbc9d1f838745c326c209f
+          approved_parent_hash: 81c7b66ca1b7b99884e468734e171316567abeb08166511a736a5bfcb4ec68a4
           evidence:
             tests:
                 - trellis/cmd/trellis::TestBoardStoryDetailAcceptance_AT_45
@@ -3131,6 +3351,9 @@ stories:
         - internal/board/polish_test.go
         - cmd/trellis/main.go
         - cmd/trellis/polish_test.go
+      activity: UA-7
+      rank: 6
+      slice: 3
       acceptance_criteria:
         - id: US-42.AC-1
           given: a rendered static or live board
@@ -3204,3 +3427,1207 @@ stories:
             tests:
                 - trellis/cmd/trellis::TestBoardAndServePolishAcceptance_AT_46
             recorded_at: "2026-09-01T21:58:27Z"
+    - id: US-43
+      kind: story
+      title: Story map backbone
+      body: Activities as root nodes (kind activity, prefix UA) with an integer position, managed via create_node, update_node and delete_node. update_node accepts a position for activities.
+      status: done
+      paths:
+        - cmd/trellis/prune_test.go
+        - internal/model/model.go
+        - internal/model/model_test.go
+        - internal/store/store.go
+        - internal/store/activity_test.go
+        - internal/core/engine.go
+        - internal/core/engine_test.go
+        - internal/core/export.go
+        - internal/core/export_test.go
+        - internal/core/fresh.go
+        - internal/core/matrix_test.go
+        - internal/core/transition_test.go
+        - internal/core/activity_test.go
+        - internal/mcpserver/server.go
+        - internal/mcpserver/server_test.go
+      activity: UA-4
+      rank: 1
+      slice: 4
+      acceptance_criteria:
+        - id: US-43.AC-1
+          given: no activity exists
+          when: get_overview, get_tree, next_story, audit and the board run
+          then: their output is unchanged compared to a project without the feature.
+        - id: US-43.AC-2
+          given: an activity exists
+          when: another activity is created without position
+          then: it gets the next position and get_overview lists activities in position order.
+        - id: US-43.AC-3
+          given: an activity has stories placed on it
+          when: delete_node is called on it
+          then: the call fails listing every placed story.
+        - id: US-43.AC-4
+          given: an activity title or body changes
+          when: a story placed on it is checked with get_tree
+          then: the story's approval stays fresh and no integrity marker changes.
+      approved_content_hash: f5cb14736c0d1977416915e6c2147ddce55617a536d1f20c28be631836dae5f9
+      children:
+        - id: AS-43
+          kind: arch
+          title: Activity roots with metadata-only story references
+          body: Activities are root nodes with UA ids from a monotonic per-kind counter and an integer position stored and ordered by the engine. Story placement references an activity id as metadata rather than composition or dependency, so activity edits cannot affect story content hashes or approval freshness. Engine activity CRUD owns default-position allocation, explicit reordering, and exhaustive delete guards. Overview, tree, next-story, audit, board and export read models add activity data only when at least one activity exists, preserving their prior output when no story map exists; doctor may emit the informational threshold suggestion defined by the living context.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: 6ace091e08103cb65d6a76a0af85370597063ab7a11106df5e6d5d27b7610df0
+          approved_parent_hash: f5cb14736c0d1977416915e6c2147ddce55617a536d1f20c28be631836dae5f9
+          children:
+            - id: DD-46
+              kind: detail_design
+              title: Activity model and store operations
+              body: Model adds root kind activity with UA prefix, integer position and no parent. Store schema and queries persist activity rows, position ordering and monotonic UA counters. Position stays outside story content and dependency hashes; list operations use position then UA id for deterministic ordering.
+              approved_content_hash: 47b16f286177d81b61ff2224aa12c3efe2eedd4f940d738dc7d9a4666524e8f9
+              approved_parent_hash: 6ace091e08103cb65d6a76a0af85370597063ab7a11106df5e6d5d27b7610df0
+              children:
+                - id: UT-46
+                  kind: unit_test
+                  title: Activity model and ordering unit tests
+                  body: Unit-test activity parent-kind legality, UA counter monotonicity, omitted-position allocation, explicit position updates, deterministic tie handling, and proof that activity or position mutations do not change a placed story content hash or approval freshness.
+                  approved_content_hash: 84bf003f7d08dcf18eed66361318be8b6c9b35fe4b431edd81aa20337c6b30d8
+                  approved_parent_hash: 47b16f286177d81b61ff2224aa12c3efe2eedd4f940d738dc7d9a4666524e8f9
+                  evidence:
+                    tests:
+                        - trellis/internal/model::TestActivityMetadata_UT_46
+                        - trellis/internal/store::TestActivityStoreMetadata_UT_46
+                    recorded_at: "2026-09-03T11:13:27Z"
+            - id: DD-47
+              kind: detail_design
+              title: Activity engine guards and conditional projections
+              body: CreateNode accepts activity roots and allocates max(position)+1 when position is omitted; UpdateNode accepts activity position and content changes; DeleteNode gathers every story placement referencing the activity and rejects once with all story ids. Overview, tree, next-story, audit and board projections branch only on presence of activities, emitting no new fields, messages or markup when none exist.
+              approved_content_hash: 57541a87c15234a3083320497fc7b621bc24503f53ae8d440748731542cd4593
+              approved_parent_hash: 6ace091e08103cb65d6a76a0af85370597063ab7a11106df5e6d5d27b7610df0
+              children:
+                - id: UT-47
+                  kind: unit_test
+                  title: Activity CRUD and projection guard unit tests
+                  body: Unit-test create/update/delete activity validation, exhaustive multi-story delete errors, position-ordered projections, and golden no-activity outputs for get_overview, get_tree, next_story, audit and board rendering.
+                  approved_content_hash: 815d3d8bd9b666cc3cda69d3f4a3334a26af2b0ad70cd78ccce088d2f28cf3f8
+                  approved_parent_hash: 57541a87c15234a3083320497fc7b621bc24503f53ae8d440748731542cd4593
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestActivityCRUDAndOverview_UT_47
+                        - trellis/internal/mcpserver::TestActivityBackboneAcceptance_AT_47_UT_47_IT_44
+                        - trellis/internal/mcpserver::TestActivityReferenceAcceptance_AT_48_UT_47
+                    recorded_at: "2026-09-03T11:13:27Z"
+            - id: IT-43
+              kind: integration_test
+              title: Activity persistence and ordering integration
+              body: 'Engine plus real SQLite store: create activities with omitted and explicit positions, update positions, reload state, and verify monotonic UA ids, next-position allocation, deterministic position ordering, and YAML persistence primitives without changing projects that contain no activities.'
+              approved_content_hash: 1c1a8901501513c358c1f6cde22032916306a3a159ec70e71184d6ff5f1d404c
+              approved_parent_hash: 6ace091e08103cb65d6a76a0af85370597063ab7a11106df5e6d5d27b7610df0
+              evidence:
+                tests:
+                    - trellis/internal/core::TestActivityPersistenceAndExport_IT_43
+                recorded_at: "2026-09-03T11:13:27Z"
+            - id: IT-44
+              kind: integration_test
+              title: Activity guards and compatibility integration
+              body: 'Engine, MCP server, audit, next-story query and board renderer over no-activity and activity-backed projects: verify unchanged no-map responses, exhaustive activity deletion blockers naming all placed stories, and unchanged story hash, approval freshness and integrity marker after activity title or body updates.'
+              approved_content_hash: 239990e659c77af6c0f1510a10e54fa228b4f4633cca4775ceabe0da38c74954
+              approved_parent_hash: 6ace091e08103cb65d6a76a0af85370597063ab7a11106df5e6d5d27b7610df0
+              evidence:
+                tests:
+                    - trellis/internal/core::TestActivityGuardsAndFreshness_IT_44
+                    - trellis/internal/mcpserver::TestActivityBackboneAcceptance_AT_47_UT_47_IT_44
+                recorded_at: "2026-09-03T11:13:27Z"
+        - id: AT-47
+          kind: acceptance_test
+          title: Activity backbone compatibility acceptance
+          body: 'Through MCP and rendered board against projects with and without activities: assert the no-activity baseline is byte-for-byte unchanged for get_overview, get_tree, next_story, audit and board output; create activities with omitted and explicit positions, then assert automatic next-position assignment and position-ordered overview output.'
+          covers:
+            - US-43.AC-1
+            - US-43.AC-2
+          approved_content_hash: 5f96a76a8df343030bd68c35a98232ba9e50dad6fb7bfcca9b80207b0c1df445
+          approved_parent_hash: f5cb14736c0d1977416915e6c2147ddce55617a536d1f20c28be631836dae5f9
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestActivityBackboneAcceptance_AT_47_UT_47_IT_44
+            recorded_at: "2026-09-03T11:13:26Z"
+        - id: AT-48
+          kind: acceptance_test
+          title: Activity reference integrity acceptance
+          body: 'Through MCP against a story placed on an activity: attempt activity deletion and assert one exhaustive error naming every placed story; approve the story, update activity title and body, then assert get_tree keeps the story approval fresh with unchanged content hash and integrity marker.'
+          covers:
+            - US-43.AC-3
+            - US-43.AC-4
+          approved_content_hash: 9e4e9d14d564f8c9eac2ba6f6a710b739615d8f1aea6386b85d24955091bed02
+          approved_parent_hash: f5cb14736c0d1977416915e6c2147ddce55617a536d1f20c28be631836dae5f9
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestActivityReferenceAcceptance_AT_48_UT_47
+            recorded_at: "2026-09-03T11:13:26Z"
+    - id: US-44
+      kind: story
+      title: Story placement
+      body: New MCP tool set_map_position(story_id, activity_id, slice) stores placement as metadata; rank is appended automatically at the end of the activity's stories in that slice. create_node kind=story accepts optional activity_id and slice. Placement appears on story nodes in get_node, get_tree and get_overview and round-trips through YAML export and import.
+      status: done
+      paths:
+        - README.md
+        - internal/model/model.go
+        - internal/store/store.go
+        - internal/store/placement_test.go
+        - internal/core/engine.go
+        - internal/core/fresh.go
+        - internal/core/export.go
+        - internal/core/export_test.go
+        - internal/core/transition_test.go
+        - internal/core/placement_test.go
+        - internal/mcpserver/server.go
+        - internal/mcpserver/placement_test.go
+      activity: UA-4
+      rank: 2
+      slice: 4
+      acceptance_criteria:
+        - id: US-44.AC-1
+          given: a done story
+          when: set_map_position is called
+          then: the story stays done, its content hash is unchanged and no integrity marker changes.
+        - id: US-44.AC-2
+          given: a story is placed
+          when: get_tree runs
+          then: activity, rank and slice appear on the story node.
+        - id: US-44.AC-3
+          given: the map is incomplete
+          when: create_node kind=story is called without placement
+          then: the story is created as unmapped story.
+        - id: US-44.AC-4
+          given: activities and placements exist
+          when: export then import run
+          then: activities, positions and placements round-trip identically.
+        - id: US-44.AC-5
+          given: set_map_position names an unknown activity or slice below 1
+          when: it is called
+          then: it fails listing every existing activity.
+      depends_on:
+        - target: US-43
+      approved_content_hash: c6c95259f540a16985e18987bb7004f447e52dd60291d55033e2c882a06ec470
+      children:
+        - id: AS-44
+          kind: arch
+          title: Placement as unhashed story metadata
+          body: Placement lives on story nodes as activity, rank and slice metadata, excluded from the content hash and approval freshness like paths. Store persists nullable placement and returns deterministic projections. Engine set_map_position validates story, activity and slice, appends rank after stories in the same activity and slice, updates placement atomically, and preserves story status, approval and integrity marker. Story creation accepts activity_id and slice together or remains an unmapped story while the story map is incomplete. MCP exposes object-typed contracts and conditionally projects placement through get_node, get_tree and get_overview. YAML export and import preserve activity positions and placement metadata. Validation follows machine-readable exhaustive errors and story-map optionality.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+          approved_parent_hash: c6c95259f540a16985e18987bb7004f447e52dd60291d55033e2c882a06ec470
+          children:
+            - id: DD-48
+              kind: detail_design
+              title: Placement model, storage and hash boundary
+              body: Model adds nullable story placement fields for activity id, integer rank and integer slice. Store schema, create, update and read queries persist those fields without adding them to content-hash input or approval invalidation. Placement reads remain absent for unmapped stories and deterministic for placed stories.
+              approved_content_hash: c924efb9e1056d1f074e179fc4b76674cb75d62cdba874e5f0b346ecd1658049
+              approved_parent_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+              children:
+                - id: UT-48
+                  kind: unit_test
+                  title: Placement storage and hash unit tests
+                  body: Unit-test nullable placement persistence, replacement and reload; rank and slice integer storage; unmapped-story reads; and proof that placement changes leave content hash, approval freshness, done status and integrity marker unchanged.
+                  approved_content_hash: b6d3c85219d2e884d4615cb5476649c8fdafcdc55a62fd4c94c1e04b23a2b3a2
+                  approved_parent_hash: c924efb9e1056d1f074e179fc4b76674cb75d62cdba874e5f0b346ecd1658049
+                  evidence:
+                    tests:
+                        - trellis/internal/store::TestStoryPlacementStorage_UT_48
+                    recorded_at: "2026-09-03T11:46:54Z"
+            - id: DD-49
+              kind: detail_design
+              title: Placement engine rules
+              body: Engine SetMapPosition requires a story, an existing activity that is approved and fresh, and slice at least 1, then computes max(rank)+1 within the target activity and slice and writes placement atomically. Repositioning uses the target lane tail. CreateNode kind=story accepts activity_id and slice as a pair, applies the same validation, activity approval check and rank allocation, and permits omission as an unmapped story while the story map is incomplete. Invalid requests report every applicable violation and every existing activity.
+              approved_content_hash: 178993dd3d9b9c2a32eaa7988b07b21c17278c6bfe6fb7ef4c2f5291b9c2ff9a
+              approved_parent_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+              children:
+                - id: UT-50
+                  kind: unit_test
+                  title: Placement engine unit tests
+                  body: Unit-test initial placement, repositioning, rank append scoped by activity and slice, create-with-placement, create-without-placement while the story map is incomplete, unknown story, unknown activity, missing placement pair and slice below 1, including machine-readable exhaustive candidate lists.
+                  approved_content_hash: cb2d356d2057927e7200f8e57686977fce7beda488786ef8b253e18a6722e61c
+                  approved_parent_hash: 178993dd3d9b9c2a32eaa7988b07b21c17278c6bfe6fb7ef4c2f5291b9c2ff9a
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestStoryPlacementEngine_UT_50
+                    recorded_at: "2026-09-03T11:46:54Z"
+            - id: DD-50
+              kind: detail_design
+              title: MCP projections and YAML placement round-trip
+              body: MCP registers set_map_position with object-typed input and output schemas and extends story projections in get_node, get_tree and get_overview with optional activity, rank and slice fields. Export emits position-ordered activities and optional story placement metadata; import restores both before dependent projections are read. Projects and stories without placement keep optional fields absent.
+              approved_content_hash: 71008fc8a71e510593411dd1cde93c2b19b7135eaa24402b17cf3b5dd934128d
+              approved_parent_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+              children:
+                - id: UT-49
+                  kind: unit_test
+                  title: Placement schema, projection and YAML unit tests
+                  body: Unit-test set_map_position schema object types, optional placement serialization, get_node/get_tree/get_overview projection fields, absent fields for unmapped stories, ordered activity export, placement import, and export-import equality.
+                  approved_content_hash: a3293aab398b03ad70efaf3b26f36bdef95d982059c5763fecf9a2b549a8e628
+                  approved_parent_hash: 71008fc8a71e510593411dd1cde93c2b19b7135eaa24402b17cf3b5dd934128d
+                  evidence:
+                    tests:
+                        - trellis/internal/mcpserver::TestPlacementRoundTripValidation_AT_51_UT_49_IT_46
+                    recorded_at: "2026-09-03T11:46:54Z"
+            - id: IT-45
+              kind: integration_test
+              title: Placement persistence and lifecycle integration
+              body: 'Engine plus real SQLite store: place and reposition todo and done stories across activities and slices, reload state, verify lane-scoped rank append and projections, and prove content hash, approval freshness, status and integrity marker remain unchanged.'
+              approved_content_hash: 20fba06c64b87c87a8cc5d1169e864100f91cb438b6b4e9fbde5f0a688af0c06
+              approved_parent_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+              evidence:
+                tests:
+                    - trellis/internal/core::TestPlacementPersistenceAndLifecycle_IT_45
+                recorded_at: "2026-09-03T11:46:54Z"
+            - id: IT-46
+              kind: integration_test
+              title: MCP placement and YAML integration
+              body: 'In-memory MCP session plus export/import: create mapped and unmapped stories, call set_map_position, verify object-shaped tool schemas and get_node/get_tree/get_overview projections, round-trip activities, positions and placements, and verify exhaustive unknown-activity and invalid-slice errors.'
+              approved_content_hash: 53adae85416cefa882d5852d8a089449cc778bae099ce36d365fdefeabec0f83
+              approved_parent_hash: 713bcffa4e9edf92da09dab302c19d56b4744ed9303936db596962aac42dd03f
+              evidence:
+                tests:
+                    - trellis/internal/mcpserver::TestPlacementMutationAndProjection_AT_49_IT_46
+                    - trellis/internal/mcpserver::TestPlacementRoundTripValidation_AT_51_UT_49_IT_46
+                recorded_at: "2026-09-03T11:46:54Z"
+        - id: AT-49
+          kind: acceptance_test
+          title: Placement mutation and projection acceptance
+          body: 'Through MCP against an approved done story and an approved and fresh activity: call set_map_position, then assert status stays done, content hash and approval freshness stay unchanged, no integrity marker changes, and get_tree exposes activity, appended rank and slice on the story node.'
+          covers:
+            - US-44.AC-1
+            - US-44.AC-2
+          approved_content_hash: 6844b76775a428661c475af0d3b2cdf25bb7d857e012fa607b3a792c3a81dafa
+          approved_parent_hash: c6c95259f540a16985e18987bb7004f447e52dd60291d55033e2c882a06ec470
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacementMutationAndProjection_AT_49_IT_46
+            recorded_at: "2026-09-03T11:46:54Z"
+        - id: AT-50
+          kind: acceptance_test
+          title: Optional unmapped story acceptance
+          body: 'Through MCP while the story map is incomplete: call create_node kind=story without activity_id or slice and assert creation succeeds as an unmapped story.'
+          covers:
+            - US-44.AC-3
+          approved_content_hash: 72ba39942f872cf5c68ff376006d11e7cb980b7f6c57c5d01dfceb166dc958e5
+          approved_parent_hash: c6c95259f540a16985e18987bb7004f447e52dd60291d55033e2c882a06ec470
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestOptionalUnmappedStory_AT_50
+            recorded_at: "2026-09-03T11:46:54Z"
+        - id: AT-51
+          kind: acceptance_test
+          title: Placement round-trip and validation acceptance
+          body: 'Through MCP and YAML export/import with multiple activities and slices: assert activity positions and story placement round-trip identically; call set_map_position with an unknown activity and with slice below 1, then assert each machine-readable exhaustive error names the violated rule and lists every existing activity.'
+          covers:
+            - US-44.AC-4
+            - US-44.AC-5
+          approved_content_hash: 0d535d5592b5f7e8cf3829890c2e7f11738e7111b7692c72e3db9c14a4077404
+          approved_parent_hash: c6c95259f540a16985e18987bb7004f447e52dd60291d55033e2c882a06ec470
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacementRoundTripValidation_AT_51_UT_49_IT_46
+            recorded_at: "2026-09-03T11:46:54Z"
+    - id: US-45
+      kind: story
+      title: Placement gate
+      body: 'Map complete is derived on every call as: at least one activity and no unmapped story. The placement gate is prospective: it evaluates the state before a mutation and rejects every mutation that would turn a complete map incomplete, with an exhaustive error naming the activities and open slices. No import or refine gate: an unmapped story cannot exist while the map is complete.'
+      status: done
+      paths:
+        - internal/core/activity_test.go
+        - internal/core/engine.go
+        - internal/core/export_test.go
+        - internal/core/placement_gate.go
+        - internal/core/placement_test.go
+        - internal/mcpserver/placement_test.go
+        - internal/mcpserver/server_test.go
+      activity: UA-4
+      rank: 3
+      slice: 4
+      acceptance_criteria:
+        - id: US-45.AC-1
+          given: map complete
+          when: create_node kind=story is called without activity_id and slice
+          then: it fails, states that the map is complete, and lists every activity and the open slices.
+        - id: US-45.AC-2
+          given: map complete
+          when: set_map_position would clear a story's placement
+          then: it fails.
+        - id: US-45.AC-5
+          given: the map is incomplete before the call
+          when: create_node kind=story without placement or set_map_position runs
+          then: behavior is unchanged from before this story.
+      depends_on:
+        - target: US-44
+      approved_content_hash: 73ea5b3637a794f30785f0d6b1bd07f5c57e7c87c256a1afd2c6d68623a64683
+      children:
+        - id: AS-45
+          kind: arch
+          title: Prospective derived placement invariant at mutation boundaries
+          body: 'Engine derives map complete before every guarded mutation from current persisted data: at least one activity and no unmapped story. No flag, cache or config switch stores map state. Shared placement gate evaluation protects story creation without placement and any placement-clearing mutation. A mutation is rejected only when its pre-mutation state is map complete and its result would be map incomplete. Rejections follow machine-readable exhaustive errors and return deterministic activity and open-slice candidates. Map incomplete behavior, YAML import and refine remain unchanged except that placement targeting an activity always runs the activity approval check. Placement stays unhashed metadata.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: e0ca5899fd94fac0e12dc2b4a7e3aa238a1651f68be30b92bb7103e2a8aaeeb2
+          approved_parent_hash: 73ea5b3637a794f30785f0d6b1bd07f5c57e7c87c256a1afd2c6d68623a64683
+          children:
+            - id: DD-51
+              kind: detail_design
+              title: Prospective mutation placement guards
+              body: CreateNode derives map complete before accepting a story without activity_id and slice. SetMapPosition derives the same pre-mutation state before any request that would clear placement. If pre-state is map complete, either mutation returns an exhaustive placement gate error before any write. If pre-state is map incomplete, existing validation and writes remain unchanged apart from the activity approval check required whenever placement targets an activity. Import and transition paths contain no placement gate.
+              approved_content_hash: 88b3de40631430f51aaca74045f1d584f420483f814592f46b176c511a565629
+              approved_parent_hash: e0ca5899fd94fac0e12dc2b4a7e3aa238a1651f68be30b92bb7103e2a8aaeeb2
+              children:
+                - id: UT-57
+                  kind: unit_test
+                  title: Prospective placement mutation guard unit tests
+                  body: Unit-test story creation without placement and placement-clear attempts under pre-mutation map complete and map incomplete states. Assert complete-map failures list every activity and open slice and write nothing; assert map incomplete behavior remains unchanged when any target activity is approved and fresh.
+                  approved_content_hash: 647039d7c16bd5f3eb3efbdec1808996d582b0b45d78c10fe7c93ff944182931
+                  approved_parent_hash: 88b3de40631430f51aaca74045f1d584f420483f814592f46b176c511a565629
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47/activities_with_zero_stories
+                        - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47
+                    recorded_at: "2026-09-03T13:01:06Z"
+            - id: DD-53
+              kind: detail_design
+              title: Per-call map-state derivation and exhaustive candidates
+              body: 'Core computes map complete inside each guarded mutation from current persisted data: activities count is at least one and the exhaustive unmapped story query is empty. Result is never persisted. Placement-gate problem construction deterministically lists all activities and open slices. Store queries return complete ordered sets rather than first matches.'
+              approved_content_hash: 4e8d6ff3a600baa3b5457b8d6f326ded3e4518e3b83d23729dfe93fb1ff8fb9e
+              approved_parent_hash: e0ca5899fd94fac0e12dc2b4a7e3aa238a1651f68be30b92bb7103e2a8aaeeb2
+              children:
+                - id: UT-52
+                  kind: unit_test
+                  title: Map-state derivation unit tests
+                  body: Unit-test zero activities, activities with zero stories, one and many unmapped stories, transition from map incomplete to map complete and back only through permitted data mutation, repeated calls proving no stored flag, and deterministic activity/open-slice ordering.
+                  approved_content_hash: 93500d0d2d0e633ae53a5102954903351734849f0bdb325da7a32900d07531e4
+                  approved_parent_hash: 4e8d6ff3a600baa3b5457b8d6f326ded3e4518e3b83d23729dfe93fb1ff8fb9e
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47/activities_with_zero_stories
+                        - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47
+                    recorded_at: "2026-09-03T13:01:06Z"
+            - id: IT-47
+              kind: integration_test
+              title: Dynamic placement gate integration
+              body: 'Engine plus real SQLite store: move a project between map incomplete and map complete solely through permitted story, approved and fresh activity, and placement mutations, invoking story creation and placement-clear attempts in both pre-mutation states. Verify every call derives pre-mutation state, complete-map failures are exhaustive and make no write, and map incomplete results retain prior behavior subject to the activity approval check.'
+              approved_content_hash: 1cc2985e31650f8c6bd86042f947d10787db4dd58c4fcc490dcbcde0eb9fed4c
+              approved_parent_hash: e0ca5899fd94fac0e12dc2b4a7e3aa238a1651f68be30b92bb7103e2a8aaeeb2
+              evidence:
+                tests:
+                    - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47/activities_with_zero_stories
+                    - trellis/internal/core::TestPlacementGateState_UT_52_UT_57_IT_47
+                    - trellis/internal/mcpserver::TestPlacementGateAcceptance_AT_52_IT_47
+                recorded_at: "2026-09-03T13:01:06Z"
+        - id: AT-52
+          kind: acceptance_test
+          title: Dynamic placement gate acceptance
+          body: 'Through MCP, begin with a map that is incomplete before the call and an approved and fresh target activity, then verify story creation without placement and set_map_position behavior match the prior contract apart from the activity approval check. Place the last unmapped story so map complete becomes true, then on the next call create a story without activity_id and slice and attempt to clear placement. Assert both fail before any write, state that the placement gate is active because pre-mutation state is map complete, and list every activity and open slice. No flag or toggle changes state: persisted activities and placements alone change the next call result.'
+          covers:
+            - US-45.AC-1
+            - US-45.AC-2
+            - US-45.AC-5
+          approved_content_hash: 5c757cc7e3754edd8786c2615ed1dd21cc1857441660a5b12aca2f38fcd3897f
+          approved_parent_hash: 73ea5b3637a794f30785f0d6b1bd07f5c57e7c87c256a1afd2c6d68623a64683
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacementGateAcceptance_AT_52_IT_47
+            recorded_at: "2026-09-03T13:01:06Z"
+    - id: US-46
+      kind: story
+      title: Map-aware overview and next story
+      body: get_overview groups stories by activity in position order, each activity reporting done/total per slice, followed by an unmapped group; it reports map complete or the count and ids of unmapped stories; every empty activity×slice cell up to the highest used slice is listed as gap. next_story orders candidates by slice, then rank, then id; without a map ordering stays by id.
+      status: done
+      paths:
+        - internal/core/fresh.go
+        - internal/core/next.go
+        - internal/core/storymap.go
+        - internal/core/storymap_test.go
+        - internal/mcpserver/storymap_test.go
+      activity: UA-4
+      rank: 4
+      slice: 4
+      acceptance_criteria:
+        - id: US-46.AC-1
+          given: a story map exists
+          when: get_overview runs
+          then: stories appear grouped by activity in position order with slice, and unmapped stories in a final group.
+        - id: US-46.AC-2
+          given: a story map exists
+          when: get_overview runs
+          then: it reports "map complete" or "N unmapped" with the story ids.
+        - id: US-46.AC-3
+          given: a story map exists
+          when: get_overview runs
+          then: each activity reports done/total per slice and every empty activity×slice cell is listed as gap.
+        - id: US-46.AC-4
+          given: two refined stories without open sequencing links
+          when: next_story runs
+          then: the story with the lower slice comes first, ties by rank, then id.
+        - id: US-46.AC-5
+          given: no story map
+          when: get_overview and next_story run
+          then: output and ordering are unchanged.
+      depends_on:
+        - target: US-44
+      approved_content_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+      children:
+        - id: AS-46
+          kind: arch
+          title: Conditional story-map read models and ordering
+          body: Read models first detect story map existence from current activities. With activities, one shared projection groups stories by activity position, appends an unmapped story group, derives map complete from at least one activity and no unmapped story, aggregates done/total per slice, and computes every empty activity-by-slice gap through highest used slice. NextStories applies placement order by slice, rank and story id after existing status and sequencing filtering. Without activities, both get_overview and next_story execute legacy projection and ordering paths with no added fields, messages, wrappers or serialization differences, preserving byte-identical output. All derived lists use deterministic ordering and machine-readable exhaustive ids.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+          approved_parent_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+          children:
+            - id: DD-54
+              kind: detail_design
+              title: Story-map overview aggregation
+              body: Core loads activities in position order and stories once, then builds ordered activity groups plus a final unmapped story group. It derives map complete directly from activities and unmapped stories on every call, emits either map complete or unmapped count and ids, computes done/total buckets per activity and slice, finds highest used slice, and enumerates every zero-total activity-by-slice cell as a deterministic gap.
+              approved_content_hash: d810e0e278168be332100b088af24db857a980783cd9cb4bfd96e45d94b0ab11
+              approved_parent_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+              children:
+                - id: UT-55
+                  kind: unit_test
+                  title: Overview aggregation unit tests
+                  body: Unit-test activity position ties, unmapped final group, zero and multiple unmapped stories, derived map complete changes across calls, done/total counts for every status, highest used slice, exhaustive sparse-cell gaps, and deterministic id ordering.
+                  approved_content_hash: 2328ea6cbd1e2e1f7c2d93486b0af919f47fef42124a6ad2dd80d14d1b8d77fb
+                  approved_parent_hash: d810e0e278168be332100b088af24db857a980783cd9cb4bfd96e45d94b0ab11
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestStoryMapOverview_UT_55_IT_49
+                    recorded_at: "2026-09-03T13:30:33Z"
+            - id: DD-55
+              kind: detail_design
+              title: Conditional overview serialization
+              body: GetOverview branches on activity presence before constructing map fields. Map-backed responses serialize ordered groups, map status, slice progress and gaps with concrete ids. No-activity responses reuse legacy structures and serialization without empty map objects, null fields, changed ordering, whitespace or messages; golden byte fixtures lock compatibility.
+              approved_content_hash: 4a0492eace961fe50e74f89c0da32a9b6ff3003aaac067ebd2fa199772eec522
+              approved_parent_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+              children:
+                - id: UT-54
+                  kind: unit_test
+                  title: Overview serialization compatibility unit tests
+                  body: Unit-test map-backed response fields and ordering plus byte-for-byte no-activity golden outputs covering populated, empty, stale and blocked overview variants. Assert no map key, empty wrapper, null value, text or whitespace leaks into legacy responses.
+                  approved_content_hash: 6b0b1042f08ee01b30f80dbaf84248cb20e3e574524beba567c18f56fb9201bf
+                  approved_parent_hash: 4a0492eace961fe50e74f89c0da32a9b6ff3003aaac067ebd2fa199772eec522
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestNoMapOverviewSerialization_UT_54_IT_50
+                        - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/empty
+                        - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/candidate_and_blocked
+                        - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50
+                    recorded_at: "2026-09-03T13:30:33Z"
+            - id: DD-56
+              kind: detail_design
+              title: Map-aware next-story comparator
+              body: NextStories retains existing refined-status and sequencing-link partitioning. When activities exist, candidate ordering compares slice, rank and story id deterministically; unmapped candidates sort after placed candidates by story id while the map is incomplete. When no activity exists, code selects the legacy story-id comparator and returns the unchanged object envelope and explicit empty answer.
+              approved_content_hash: dcb2e3e732fa23553f47592272369942c5a3a72165dca5a714da8d1b37609dea
+              approved_parent_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+              children:
+                - id: UT-56
+                  kind: unit_test
+                  title: Next-story ordering and compatibility unit tests
+                  body: Unit-test placement ordering by slice, rank and story id, unmapped candidate fallback, unchanged sequencing-blocked details, and byte-for-byte no-activity golden outputs for candidate, blocked and explicit empty answers using legacy story-id order.
+                  approved_content_hash: db7e0a5e8854c8aa0d662b72dda5c9f2bc3aedffd06f5e6b01d8ab476da65a20
+                  approved_parent_hash: dcb2e3e732fa23553f47592272369942c5a3a72165dca5a714da8d1b37609dea
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestMapAwareNextStories_UT_56_IT_50
+                    recorded_at: "2026-09-03T13:30:33Z"
+            - id: IT-49
+              kind: integration_test
+              title: Map overview aggregation integration
+              body: 'Engine plus real SQLite store: populate position-reordered activities, mapped and unmapped stories, multiple statuses and sparse slices. Reload and verify group order, per-slice done/total, exhaustive gaps through highest used slice, exact map completeness text/data, ids and deterministic repeated output.'
+              approved_content_hash: 9f29ded078555ed9673541d3ef37b72932d113878d2502e4f6e3c0756064e8df
+              approved_parent_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+              evidence:
+                tests:
+                    - trellis/internal/core::TestStoryMapOverview_UT_55_IT_49
+                    - trellis/internal/mcpserver::TestMapOverviewAcceptance_AT_55_AT_56_IT_49
+                recorded_at: "2026-09-03T13:30:33Z"
+            - id: IT-50
+              kind: integration_test
+              title: Overview and next-story compatibility integration
+              body: 'Engine, MCP server and serializers over matched no-map and map-backed projects: verify map-aware overview and slice/rank/id candidate order when activities exist, sequencing-blocked partition unchanged, and byte-for-byte pre-feature golden responses for get_overview and next_story when no activities exist.'
+              approved_content_hash: c50fdbd57add3bb5d9cf61486e46231ecfc52be904dcc9e132b5de37294fb972
+              approved_parent_hash: 5172d712713c0898e5cb7f01478ac8b11dc8f234632ae459e18dd674c89bb559
+              evidence:
+                tests:
+                    - trellis/internal/core::TestNoMapOverviewSerialization_UT_54_IT_50
+                    - trellis/internal/core::TestMapAwareNextStories_UT_56_IT_50
+                    - trellis/internal/mcpserver::TestMapAwareNextAcceptance_AT_57_IT_50
+                    - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/empty
+                    - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/candidate_and_blocked
+                    - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50
+                recorded_at: "2026-09-03T13:30:33Z"
+        - id: AT-55
+          kind: acceptance_test
+          title: Map grouping and completeness acceptance
+          body: Through MCP with activities created out of id order and mapped plus unmapped stories across slices, call get_overview. Assert activity groups follow activity position, each story carries slice, final group contains all unmapped story ids, and map status reports the exact unmapped count and ids. Place every unmapped story, call again, and assert status becomes map complete.
+          covers:
+            - US-46.AC-1
+            - US-46.AC-2
+          approved_content_hash: cb91e77d117777156fb020566eaf5f399e5b7498ab719cb59c7a279d8e2214c2
+          approved_parent_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestMapOverviewAcceptance_AT_55_AT_56_IT_49
+            recorded_at: "2026-09-03T13:30:33Z"
+        - id: AT-56
+          kind: acceptance_test
+          title: Slice progress and gap acceptance
+          body: Through MCP with multiple activities, done and non-done stories, and several used slices, call get_overview. Assert every activity reports exact done/total counts per slice and every empty activity-by-slice cell from slice 1 through highest used slice appears once in deterministic gap order.
+          covers:
+            - US-46.AC-3
+          approved_content_hash: bedcf7e49ecb0b4eb998a99f22808247ecb6552e8b7a67409099f913d5ebafdd
+          approved_parent_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestMapOverviewAcceptance_AT_55_AT_56_IT_49
+            recorded_at: "2026-09-03T13:30:33Z"
+        - id: AT-57
+          kind: acceptance_test
+          title: Placement-ordered next story acceptance
+          body: Through MCP with refined startable stories whose ids conflict with placement priority, call next_story. Assert candidates sort by lower slice, then lower rank, then story id, while sequencing-blocked stories remain separate with every unfinished dependency.
+          covers:
+            - US-46.AC-4
+          approved_content_hash: 4407b3db107147671eb1ad18f016c40b3fb61c8014ae7d58356a95b2505bd57d
+          approved_parent_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestMapAwareNextAcceptance_AT_57_IT_50
+            recorded_at: "2026-09-03T13:30:33Z"
+        - id: AT-58
+          kind: acceptance_test
+          title: No-map byte compatibility acceptance
+          body: Capture serialized get_overview and next_story responses for a project with no activities, including candidates, blocked stories and empty results. Exercise both interfaces after this feature and assert every response is byte-for-byte identical to the pre-feature golden output and candidate ordering remains by story id.
+          covers:
+            - US-46.AC-5
+          approved_content_hash: 1a08189bcf6c909db3249a30c73b739f10a973447fdf1aebb8235b3e3dab4994
+          approved_parent_hash: 66e2b620fdb484cc10aaed75478ab87c6d22665f824f8000de93eec86c403319
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/empty
+                - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50/candidate_and_blocked
+                - trellis/internal/mcpserver::TestNoMapReadCompatibility_AT_58_UT_54_IT_50
+            recorded_at: "2026-09-03T13:30:33Z"
+    - id: US-47
+      kind: story
+      title: Placement hints on story creation
+      body: 'While a story map exists and is incomplete, create_node kind=story without placement answers with a hint: up to three candidate activities ranked by full-text match of the story title and body against activity titles and bodies, plus the current gaps. No hint without a map. While map complete, the placement gate error already carries the candidates.'
+      status: done
+      paths:
+        - internal/core/fresh.go
+        - internal/core/placement_hint.go
+        - internal/core/placement_hint_test.go
+        - internal/core/storymap.go
+        - internal/mcpserver/placement_hint_test.go
+        - internal/mcpserver/server.go
+        - internal/store/activity_fts_test.go
+        - internal/store/store.go
+      activity: UA-4
+      rank: 5
+      slice: 4
+      acceptance_criteria:
+        - id: US-47.AC-1
+          given: a story map exists and is incomplete
+          when: a story is created unmapped
+          then: the response carries a hint naming up to three activities ranked by search match on the story's title and body.
+        - id: US-47.AC-2
+          given: a story map exists and has gaps
+          when: a story is created
+          then: the hint names the gaps.
+        - id: US-47.AC-3
+          given: no story map
+          when: a story is created
+          then: the response carries no hint.
+      depends_on:
+        - target: US-46
+      approved_content_hash: ddfe2adc8a98ed1539af237bd09641c6c081e554e518f4bffb22683119829923
+      children:
+        - id: AS-47
+          kind: arch
+          title: Conditional post-create placement guidance
+          body: After successful creation of an unmapped story, core derives current map state from persisted activities and placement. Guidance exists only when at least one activity exists and map complete is false. Activity candidates use full-text matching of story title and body against activity titles and bodies, capped at three with deterministic tie ordering. Current story map gaps are returned exhaustively in same hint. Projects without activities preserve prior create_node output byte-for-byte; map complete cannot reach successful unmapped creation because existing placement gate rejects first with its own exhaustive candidates. Existing create flow and persistence boundaries remain unchanged; no lock or transaction refactoring.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: d1bd2563f8266142b97ceef00d8b8a9f7acbc9a8eea52f75bd5959fef9be00e1
+          approved_parent_hash: ddfe2adc8a98ed1539af237bd09641c6c081e554e518f4bffb22683119829923
+          children:
+            - id: DD-57
+              kind: detail_design
+              title: Activity full-text candidate ranking
+              body: Build an activity-only FTS5 candidate query from newly created story title and body. Literal token escaping follows existing search safety rules. Matching activities order by BM25 relevance, then activity position and id for deterministic ties; response takes at most three. Candidate lookup is read-only and does not alter spec search results or activity data.
+              approved_content_hash: d7474c7b305c6ad38903568b257b03c35597ea8b211d2915b0b17d235e0cf49d
+              approved_parent_hash: d1bd2563f8266142b97ceef00d8b8a9f7acbc9a8eea52f75bd5959fef9be00e1
+              children:
+                - id: UT-58
+                  kind: unit_test
+                  title: Activity candidate FTS5 ranking unit tests
+                  body: Unit-test activity FTS5 indexing and literal query escaping for title and body terms, BM25 ordering, activity-position and id tie breaks, zero through more-than-three matches, three-result cap, and immediate create/update/delete index maintenance without changing search_specs results.
+                  approved_content_hash: dc2f5ba41571ed5a9e2bc42c207b77493a5e52ff25d086996f9984212407b3ac
+                  approved_parent_hash: d7474c7b305c6ad38903568b257b03c35597ea8b211d2915b0b17d235e0cf49d
+                  evidence:
+                    tests:
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_0
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_1
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_2
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_3
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_4
+                        - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51
+                    recorded_at: "2026-09-03T14:27:42Z"
+            - id: DD-58
+              kind: detail_design
+              title: Conditional placement hint projection
+              body: CreateNode adds placement hint only after successful creation of an unmapped story when activities exist and map complete is false. Hint contains ranked activity candidates and every current story map gap in deterministic activity-position then slice order. No-activity responses use unchanged serialization. Existing placement gate handles map complete before creation and remains sole response there; mapped creation receives no hint.
+              approved_content_hash: 246aa8c49aad0cf3eec76c6db7aff56ad98cd4a2a14b66fbcbb64538d3399d8f
+              approved_parent_hash: d1bd2563f8266142b97ceef00d8b8a9f7acbc9a8eea52f75bd5959fef9be00e1
+              children:
+                - id: UT-59
+                  kind: unit_test
+                  title: Placement hint state and projection unit tests
+                  body: Unit-test successful unmapped creation with activities while map complete is false, mapped creation, no activities, and map complete rejection. Assert hint appears only in first case, includes candidate activities and every story map gap in deterministic order, no-activity serialization is byte-identical, and placement gate error remains unchanged with no write.
+                  approved_content_hash: cf0f8cb4a59bd9af06b2342c067914cf266ef3423bf12b442a094c4d39eff245
+                  approved_parent_hash: 246aa8c49aad0cf3eec76c6db7aff56ad98cd4a2a14b66fbcbb64538d3399d8f
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestPlacementHintState_UT_59_IT_51
+                        - trellis/internal/mcpserver::TestPlacementHintAcceptance_AT_59_UT_59_IT_51
+                    recorded_at: "2026-09-03T14:27:42Z"
+            - id: IT-51
+              kind: integration_test
+              title: Placement hint creation integration
+              body: 'Engine, real SQLite FTS5 store, and MCP server: create activities with discriminating titles and bodies plus story map gaps, then create unmapped stories while map complete is false. Verify top-three BM25 activity ordering, deterministic ties, exhaustive gaps, persisted story, and immediate activity-index updates. Verify no hint and byte-identical prior response without activities, and verify map complete still returns existing placement gate error with candidates and no write.'
+              approved_content_hash: b9656faad5a8ee758bc6450fca794e5d1ee45933d6c0670871d734f300c6ecb4
+              approved_parent_hash: d1bd2563f8266142b97ceef00d8b8a9f7acbc9a8eea52f75bd5959fef9be00e1
+              evidence:
+                tests:
+                    - trellis/internal/core::TestPlacementHintState_UT_59_IT_51
+                    - trellis/internal/mcpserver::TestPlacementHintAcceptance_AT_59_UT_59_IT_51
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_0
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_1
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_2
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_3
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51/cardinality_4
+                    - trellis/internal/store::TestActivityFTSCandidates_UT_58_IT_51
+                recorded_at: "2026-09-03T14:27:42Z"
+        - id: AT-59
+          kind: acceptance_test
+          title: Placement hint acceptance
+          body: Through MCP, create an unmapped story in an existing incomplete story map whose story title and body rank more than three activities and whose grid has multiple story map gaps. Assert successful response names only top three activities in full-text relevance order and names every gap. Repeat with no activities and assert no hint plus byte-identical legacy create response. Reach map complete and assert unmapped creation is rejected by existing placement gate response rather than placement hint.
+          covers:
+            - US-47.AC-1
+            - US-47.AC-2
+            - US-47.AC-3
+          approved_content_hash: 51d244b6f29bf35563bc05feda43f8e367f14eb0e66d3353c6f24dbae48f6a70
+          approved_parent_hash: ddfe2adc8a98ed1539af237bd09641c6c081e554e518f4bffb22683119829923
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacementHintAcceptance_AT_59_UT_59_IT_51
+            recorded_at: "2026-09-03T14:27:42Z"
+    - id: US-48
+      kind: story
+      title: Story map board tab
+      body: 'The board (static export and live board) gets a Map tab: columns are activities in position order, rows are slices ascending, cells hold story cards colored by status with integrity marker, plus a trailing column for unmapped stories. The tab exists only when at least one activity exists. Cards open the existing story detail overlay, which shows placement.'
+      status: done
+      paths:
+        - internal/board/board.go
+        - internal/board/story_map_test.go
+        - internal/mcpserver/server_test.go
+      activity: UA-7
+      rank: 1
+      slice: 4
+      acceptance_criteria:
+        - id: US-48.AC-1
+          given: a story map exists
+          when: the board renders
+          then: a Map tab shows the grid and unmapped stories in a trailing column.
+        - id: US-48.AC-2
+          given: no story map
+          when: the board renders
+          then: no Map tab appears and the HTML is unchanged.
+        - id: US-48.AC-3
+          given: a card on the map is clicked
+          when: the story detail overlay opens
+          then: it shows activity, rank and slice.
+      depends_on:
+        - target: US-44
+      approved_content_hash: 5f0e0f06fc2b24c9771e1491b406d6073a418ca2021390646e92e327143275b2
+      children:
+        - id: AS-48
+          kind: arch
+          title: Conditional self-contained story map board view
+          body: Existing shared board Render path conditionally adds Map tab only when at least one activity exists. Map view reuses board story data, compact card presentation, integrity marker, status styling, and existing story detail overlay. Columns follow activity position and end with unmapped story column; rows follow slices ascending. Story detail overlay projects placement. CSS, data, and tab JavaScript remain embedded in same self-contained Render output with no external assets or write path. Live handlers may add live-only capability after Render; static export remains Render output. When no activity exists, legacy Render branch emits byte-identical HTML. Rendering changes only; no lock or transaction refactoring.
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: e6d976f23605189554a4ea11018523ea361dfa5a53aec9bc8d253b3488e0ed10
+          approved_parent_hash: 5f0e0f06fc2b24c9771e1491b406d6073a418ca2021390646e92e327143275b2
+          children:
+            - id: DD-59
+              kind: detail_design
+              title: Story map grid projection
+              body: Board view model detects story map existence from activities. With activities, it projects columns in activity position order plus trailing unmapped story column, rows for used slices in ascending order, and cards in placement rank then story id order. Cards reuse lifecycle status color and integrity marker data. Existing story detail data adds activity, rank and slice for placed stories and identifies unmapped stories without inventing placement.
+              approved_content_hash: 0eed9a11ae405e8870dadab1d6b9dacd5ac67cd44f6c66eb965ff352950dd04c
+              approved_parent_hash: e6d976f23605189554a4ea11018523ea361dfa5a53aec9bc8d253b3488e0ed10
+              children:
+                - id: UT-60
+                  kind: unit_test
+                  title: Story map board projection unit tests
+                  body: Unit-test activity position ordering, ascending slice rows, placement rank and story id card ordering, trailing unmapped story column, lifecycle status color and integrity marker reuse, and story detail placement fields for mapped and unmapped stories.
+                  approved_content_hash: d4925317012115af614e893da036ec460d09406e2f5975876862b82f80bef8e8
+                  approved_parent_hash: 0eed9a11ae405e8870dadab1d6b9dacd5ac67cd44f6c66eb965ff352950dd04c
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestStoryMapProjection_UT_60
+                    recorded_at: "2026-09-03T15:41:30Z"
+            - id: DD-60
+              kind: detail_design
+              title: Conditional embedded Map tab rendering
+              body: Board template adds accessible Overview and Map tab controls, map grid markup, embedded CSS, and dependency-free tab switching JavaScript only when activities exist. Map cards invoke existing story detail overlay open and close behavior. Static export, --serve, and MCP board server share this self-contained Render output; live handlers may augment it after Render while static export remains read-only. No-activity Render branch emits exact pre-feature bytes with no tab markup, CSS, script, whitespace, or external asset changes.
+              approved_content_hash: 01ea7f38e3434f9755f7f53dd1d5680c6b20de8c0c9ce37673f4d81932a22305
+              approved_parent_hash: e6d976f23605189554a4ea11018523ea361dfa5a53aec9bc8d253b3488e0ed10
+              children:
+                - id: UT-61
+                  kind: unit_test
+                  title: Conditional Map tab HTML unit tests
+                  body: Unit-test Map tab controls and map grid only with activities, existing story detail overlay hooks from map cards, keyboard tab switching hooks, embedded CSS and JavaScript, no external assets or mutation code in static Render, shared map markup across static and live paths despite later live-only augmentation, and byte-for-byte no-activity golden Render HTML including whitespace.
+                  approved_content_hash: 67eff828c29d0b13722cc1b89cec05813dcbd52ea9e4f805a9fe2d0f3dd17450
+                  approved_parent_hash: 01ea7f38e3434f9755f7f53dd1d5680c6b20de8c0c9ce37673f4d81932a22305
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestConditionalMapHTML_UT_61
+                    recorded_at: "2026-09-03T15:41:30Z"
+            - id: IT-52
+              kind: integration_test
+              title: Static and live story map board integration
+              body: Render mapped and unmapped stories through static export, --serve, and MCP board server. Assert shared activity-position columns, ascending slice rows, placement-ranked cards, trailing unmapped story column, status and integrity marker presentation, and shared story detail overlay with activity, rank and slice. Assert static Render is self-contained and has no write path; live handlers may add self-contained live-only augmentation after Render. Render no-activity project through same paths and compare shared Render bytes with pre-feature golden output.
+              approved_content_hash: 8bde1777102f2085ccbb1de2acc5c28ed991bbdd22aac6bc6a961f4fe73bd99f
+              approved_parent_hash: e6d976f23605189554a4ea11018523ea361dfa5a53aec9bc8d253b3488e0ed10
+              evidence:
+                tests:
+                    - trellis/internal/board::TestStoryMapSharedRenderPaths_IT_52
+                recorded_at: "2026-09-03T15:41:30Z"
+        - id: AT-60
+          kind: acceptance_test
+          title: Story map board tab acceptance
+          body: Drive real static export and live board with position-reordered activities, multiple slices, mapped stories, and unmapped stories. Parse one self-contained HTML document and assert Map tab grid uses activity position order, slice ascending rows, and trailing unmapped story column. Activate map card and assert existing story detail overlay includes activity, rank and slice. Render project without activities and assert Map tab is absent and full HTML is byte-identical to pre-feature golden output with no external assets.
+          covers:
+            - US-48.AC-1
+            - US-48.AC-2
+            - US-48.AC-3
+          approved_content_hash: 2d6c9518d3b3ce07e04f7ff731d78ac6098dd65bccf772ee8a6172bf66c5919b
+          approved_parent_hash: 5f0e0f06fc2b24c9771e1491b406d6073a418ca2021390646e92e327143275b2
+          evidence:
+            tests:
+                - trellis/internal/board::TestStoryMapBoardAcceptance_AT_60
+            recorded_at: "2026-09-03T15:41:30Z"
+    - id: US-49
+      kind: story
+      title: Walking skeleton in doctor
+      body: 'trellis doctor reports map state as information, never as failure: skeleton gaps (slice 1 cells without a story), unmapped stories with the note that the placement gate activates at zero, and for projects with ten or more stories and no map a single suggestion line.'
+      status: done
+      paths:
+        - cmd/trellis/doctor.go
+        - cmd/trellis/doctor_storymap_test.go
+      activity: UA-7
+      rank: 2
+      slice: 4
+      acceptance_criteria:
+        - id: US-49.AC-1
+          given: a story map with slice 1 missing a story under one activity
+          when: doctor runs
+          then: it lists the activity as skeleton gap and exits zero.
+        - id: US-49.AC-2
+          given: the map is incomplete
+          when: doctor runs
+          then: it lists every unmapped story and states that the placement gate activates when none remain.
+        - id: US-49.AC-3
+          given: no story map and at least ten stories
+          when: doctor runs
+          then: it prints exactly one line suggesting a story map.
+        - id: US-49.AC-4
+          given: no story map and fewer than ten stories
+          when: doctor runs
+          then: it prints nothing about maps.
+      depends_on:
+        - target: US-46
+      approved_content_hash: f67a3eeace5b509084e067f88055721e41020bf7692d4306cdcb490a5d95bd79
+      children:
+        - id: AS-49
+          kind: arch
+          title: Informational story map diagnostics in doctor
+          body: 'doctor derives story map diagnostics from current activities and placements without mutation. With activities, it reports every walking skeleton gap and, while map complete is false, every unmapped story plus placement gate activation note. Without activities, exactly one suggestion appears at ten or more stories and no map text appears below threshold. Map diagnostics are informational: they never become warn or fail, never affect exit status, and --fix performs no map mutation. Existing wiring checks retain their prior severities and exit behavior. Read paths only; no lock or transaction refactoring.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: 9cbdc9bc86b1e821a1254d8e4c7b822905d9b9243306c8e2ae1640c8f0bfd071
+          approved_parent_hash: f67a3eeace5b509084e067f88055721e41020bf7692d4306cdcb490a5d95bd79
+          children:
+            - id: DD-61
+              kind: detail_design
+              title: Story map doctor diagnostic derivation
+              body: doctor read model loads activities in position order and story placements. With activities, walking skeleton gaps are activities lacking any slice 1 story. While map complete is false, unmapped stories are listed exhaustively by story id with one placement gate activation note. Without activities, story count at ten or more yields one suggestion line; lower counts yield no story map output. Derived diagnostics have informational level and no fixer.
+              approved_content_hash: 4a46afd6becd229acd96fb653286f38d7669c66cfec8d516fd3eaaa86a5d232a
+              approved_parent_hash: 9cbdc9bc86b1e821a1254d8e4c7b822905d9b9243306c8e2ae1640c8f0bfd071
+              children:
+                - id: UT-62
+                  kind: unit_test
+                  title: Story map doctor derivation unit tests
+                  body: Unit-test zero, one, and multiple walking skeleton gaps; exhaustive unmapped story ordering while map complete is false; no unmapped note when map complete; no-activity counts 0, 9, 10, and above; exactly one threshold suggestion; informational level; and absent fixer.
+                  approved_content_hash: c42e372f16a976eca948dff946a7db222e870a3b912d92f0258a2ef77277950d
+                  approved_parent_hash: 4a46afd6becd229acd96fb653286f38d7669c66cfec8d516fd3eaaa86a5d232a
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestStoryMapDoctorDerivation_UT_62
+                    recorded_at: "2026-09-03T16:00:03Z"
+            - id: DD-62
+              kind: detail_design
+              title: Doctor output and exit isolation
+              body: cmdDoctor appends deterministic story map information to existing finding output without changing ok, warn, or fail classification. Map lines never increment failure count, never alter exit code, and run identically with or without --fix; --fix invokes no activity or placement mutation. Existing doctor read-only default, wiring repairs, stderr/stdout choices, and user-owned failure commands remain unchanged.
+              approved_content_hash: efb6df8e510dc5ba1fc464738af389fcf00a1316e2e41185858941fc1022b23f
+              approved_parent_hash: 9cbdc9bc86b1e821a1254d8e4c7b822905d9b9243306c8e2ae1640c8f0bfd071
+              children:
+                - id: UT-63
+                  kind: unit_test
+                  title: Doctor map output and exit unit tests
+                  body: Unit-test deterministic map lines, exit 0 with healthy existing wiring checks, unchanged nonzero exit with existing failures, identical map information under --fix, no activity or placement writer invocation, and preservation of prior doctor output when no map message applies.
+                  approved_content_hash: ac49a46d30bf0fc85aa425068e343dc554ad946427d07f233af97268d38b3082
+                  approved_parent_hash: efb6df8e510dc5ba1fc464738af389fcf00a1316e2e41185858941fc1022b23f
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestDoctorMapOutputIsolation_UT_63
+                    recorded_at: "2026-09-03T16:00:03Z"
+            - id: IT-53
+              kind: integration_test
+              title: Story map doctor integration
+              body: Run doctor CLI against real project stores covering complete and incomplete maps, multiple walking skeleton gaps, multiple unmapped stories, no-map story counts 9 and 10, and --fix. Assert deterministic exhaustive map information, single threshold suggestion, silence below threshold, no map writes, and exit 0 when existing wiring checks pass. Add existing wiring failure and prove its prior nonzero exit remains unchanged by map information.
+              approved_content_hash: 9593a056797f4d47804034b7ee1625a1087bf1d410d321f29804f5f8a706d8fa
+              approved_parent_hash: 9cbdc9bc86b1e821a1254d8e4c7b822905d9b9243306c8e2ae1640c8f0bfd071
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestStoryMapDoctorIntegration_IT_53/incomplete_complete_fix_and_failure
+                    - trellis/cmd/trellis::TestStoryMapDoctorIntegration_IT_53/no_map_threshold
+                    - trellis/cmd/trellis::TestStoryMapDoctorIntegration_IT_53
+                recorded_at: "2026-09-03T16:00:03Z"
+        - id: AT-61
+          kind: acceptance_test
+          title: Walking skeleton doctor acceptance
+          body: Drive real trellis doctor on healthy wired repositories. For story map missing slice 1 under multiple activities, assert every activity appears as walking skeleton gap and exit is 0. For map complete false, assert every unmapped story id and note that placement gate activates when none remain. For no activities, assert exactly one story map suggestion line at ten stories and no map output at nine. Repeat with --fix and assert placements and activities are unchanged.
+          covers:
+            - US-49.AC-1
+            - US-49.AC-2
+            - US-49.AC-3
+            - US-49.AC-4
+          approved_content_hash: bef437b0e4df8534bab3d1b4391e686bf93b612f29ca1672acb8c41c6a45330f
+          approved_parent_hash: f67a3eeace5b509084e067f88055721e41020bf7692d4306cdcb490a5d95bd79
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestWalkingSkeletonDoctorAcceptance_AT_61
+            recorded_at: "2026-09-03T16:00:03Z"
+    - id: US-50
+      kind: story
+      title: Story map drag and drop
+      body: The live board accepts card moves via a POST endpoint per project that calls set_map_position through the engine lock; the SSE reload refreshes the view. The static export stays read-only. Engine rejections are shown with the full error and the card snaps back.
+      status: done
+      paths:
+        - go.mod
+        - go.sum
+        - internal/board/serve.go
+        - internal/board/drag_test.go
+        - internal/board/story_map_test.go
+      activity: UA-7
+      rank: 3
+      slice: 4
+      acceptance_criteria:
+        - id: US-50.AC-1
+          given: the live board
+          when: a card is dropped on another activity-by-slice cell
+          then: the server applies set_map_position and the reload shows the new placement.
+        - id: US-50.AC-2
+          given: the static board export
+          when: rendered
+          then: cards are not draggable and no POST is issued.
+        - id: US-50.AC-3
+          given: a move is rejected by the engine
+          when: the response returns
+          then: the board shows the exhaustive error and the card returns to its previous cell.
+      depends_on:
+        - target: US-48
+      approved_content_hash: 8eef7818b90faead838e71b896d7875c8c8c50e7a66d5dc342fbb353fb7d9b5c
+      children:
+        - id: AS-50
+          kind: arch
+          title: Live-board-scoped placement mutation
+          body: 'Live board HTTP handlers alone expose a project-scoped POST map-position route. Each request resolves its existing project Engine and calls public Engine.SetMapPosition, preserving the exclusive per-project lock and all placement and placement gate guards without lock or transaction refactoring. Success appends the existing event and relies on per-project server-sent-events reload. Rejection returns the complete Engine error in a machine-readable response. Live board HTML injects dependency-free embedded JavaScript that enables story map card drag and drop, posts story id, target activity and slice to a relative project route, and restores the exact prior card location while showing the complete error on failure. Static export remains byte-compatible with US-48 rendering: no draggable cards, drag code, mutation route, POST, or external assets.'
+          depends_on:
+            - target: CC-1
+              pinned_hash: 7b3523464c92329a5e1f2b5c6e66de1ffeaecb5f275a566b28d6995e9b23c9d2
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: dede19fee5cecc4ab338d1c8b6a77ae72ec97cc75948cfa7046b1dd8dd2124fc
+          approved_parent_hash: 8eef7818b90faead838e71b896d7875c8c8c50e7a66d5dc342fbb353fb7d9b5c
+          children:
+            - id: DD-63
+              kind: detail_design
+              title: Embedded live drag client and exact rollback
+              body: Live serving augments shared Render output with one embedded dependency-free script; static export receives unchanged Render output. Script marks only story map cards draggable, captures card parent and next sibling before movement, identifies target cell activity and slice data, optimistically moves card, and sends JSON to relative `map-position`. On non-success, malformed response, or network failure it restores card to captured parent and order and writes full returned error text into an in-page `role=alert` error surface using textContent. On success it waits for existing server-sent-events reload. Drag is ignored outside valid activity-by-slice cells. Script and styles use no external assets and issue no other mutation.
+              approved_content_hash: 88afd9ed720e83c73d7214591e50d7070285165cc3ca789b3685e6831b90ba98
+              approved_parent_hash: dede19fee5cecc4ab338d1c8b6a77ae72ec97cc75948cfa7046b1dd8dd2124fc
+              children:
+                - id: UT-65
+                  kind: unit_test
+                  title: Live drag client unit tests
+                  body: Unit-test live-only script injection and static Render byte stability; only story map cards become draggable; target activity and slice payload construction; one relative POST per valid drop; captured parent and next-sibling restoration after HTTP, JSON, and network failures; complete error text rendered through textContent in role=alert; success waits for server-sent-events reload; invalid targets issue no POST; no external assets.
+                  approved_content_hash: e3906f5f440c47da5675ee73d9bbabeb689ef41df2a0f9b05dbd11703db5aade
+                  approved_parent_hash: 88afd9ed720e83c73d7214591e50d7070285165cc3ca789b3685e6831b90ba98
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestLiveDragClient_UT_65
+                    recorded_at: "2026-09-03T16:48:31Z"
+            - id: DD-64
+              kind: detail_design
+              title: Project-scoped map-position HTTP handler
+              body: 'Board live handlers register relative `map-position` endpoints beside board and `events`: `/map-position` for the single-project live board and `/p/{project-id}/map-position` for multi-project serve. Endpoint accepts POST JSON with `story_id`, `activity_id`, and integer `slice`; other methods reject without mutation. Single-project handler uses its existing Engine; multi-project handler creates Engine for route project. Handler calls only Engine.SetMapPosition, never store mutation or an unlocked helper. Success returns 204 and existing event drives server-sent-events reload. Malformed requests and complete Engine errors return deterministic machine-readable JSON with appropriate non-success status. No lock or transaction code changes.'
+              approved_content_hash: 672ebacd7283fae68c16b1ac391370b932bfa3be1accb95bece759922fb88504
+              approved_parent_hash: dede19fee5cecc4ab338d1c8b6a77ae72ec97cc75948cfa7046b1dd8dd2124fc
+              children:
+                - id: UT-64
+                  kind: unit_test
+                  title: Map-position handler unit tests
+                  body: Unit-test POST-only dispatch, strict JSON decoding of story_id, activity_id and integer slice, relative single-project and `/p/{project-id}/` routing, unknown project behavior, 204 success, deterministic machine-readable failure shape, byte-for-byte preservation of complete multiline Engine errors, no mutation for malformed or non-POST requests, and delegation to public Engine.SetMapPosition.
+                  approved_content_hash: c7026544cf7f9c8f7006e5f8add852ffdb190c15c8c2434b4f542f2b89d703af
+                  approved_parent_hash: 672ebacd7283fae68c16b1ac391370b932bfa3be1accb95bece759922fb88504
+                  evidence:
+                    tests:
+                        - trellis/internal/board::TestMapPositionHandler_UT_64
+                    recorded_at: "2026-09-03T16:48:31Z"
+            - id: IT-54
+              kind: integration_test
+              title: Live map-position endpoint integration
+              body: Exercise single-project Handler and multi-project MultiHandler through HTTP with real store and Engine. Assert route and method contract, project isolation, successful SetMapPosition placement to an approved and fresh activity and event, rejection when the target fails the activity approval check, per-project server-sent-events reload, exact exhaustive Engine rejection JSON, no mutation on invalid input, and serialization of concurrent POST mutations by existing exclusive per-project lock without lock or transaction refactoring.
+              approved_content_hash: 32aff271b5fe65820711f00ff5cc99a2daead1bbcd3a1c6897e9a6d9eec81674
+              approved_parent_hash: dede19fee5cecc4ab338d1c8b6a77ae72ec97cc75948cfa7046b1dd8dd2124fc
+              evidence:
+                tests:
+                    - trellis/internal/board::TestLiveMapPositionEndpoint_IT_54
+                recorded_at: "2026-09-03T16:48:31Z"
+            - id: IT-55
+              kind: integration_test
+              title: Static and live drag capability integration
+              body: Render same story map through static export, single-project live board, and multi-project live board. Assert static HTML remains non-draggable and contains no mutation script, route, POST, or external asset; both live paths inject equivalent relative project-scoped drag behavior. Execute success and rejection flows against HTTP handlers, asserting success waits for reload and rejection preserves full error text while restoring exact prior card cell and order.
+              approved_content_hash: bd959df501413a5739279645f92ad50aac22f7733cc20879eb00d8712cba24d1
+              approved_parent_hash: dede19fee5cecc4ab338d1c8b6a77ae72ec97cc75948cfa7046b1dd8dd2124fc
+              evidence:
+                tests:
+                    - trellis/internal/board::TestStaticAndLiveDragCapability_IT_55/single
+                    - trellis/internal/board::TestStaticAndLiveDragCapability_IT_55/multi
+                    - trellis/internal/board::TestStaticAndLiveDragCapability_IT_55
+                recorded_at: "2026-09-03T16:48:31Z"
+        - id: AT-62
+          kind: acceptance_test
+          title: Live story map move acceptance
+          body: Drive real live board HTTP serving for two projects with approved and fresh target activities. Open one project's Map tab, drag a story map card to another activity-by-slice cell, and observe one relative project-scoped POST carrying story id, activity id and slice. Assert that project's Engine placement changes through SetMapPosition, other project remains unchanged, per-project server-sent-events emits, and reloaded board shows new placement. Reject a move when the target activity fails the activity approval check.
+          covers:
+            - US-50.AC-1
+          approved_content_hash: 85cbc26d43325b87cd8da1e5b6660585bd9dbd01b22b7a51faa3b12acaca1709
+          approved_parent_hash: 8eef7818b90faead838e71b896d7875c8c8c50e7a66d5dc342fbb353fb7d9b5c
+          evidence:
+            tests:
+                - trellis/internal/board::TestLiveStoryMapMoveAcceptance_AT_62
+            recorded_at: "2026-09-03T16:48:31Z"
+        - id: AT-63
+          kind: acceptance_test
+          title: Static story map remains read-only acceptance
+          body: Drive real static export for a project with a story map. Parse and exercise exported HTML while recording attempted network requests. Assert story map cards are not draggable, no drag-and-drop mutation JavaScript or map-position route is present, no POST is issued, HTML remains self-contained with no external assets, and existing Map tab and story detail overlay remain usable.
+          covers:
+            - US-50.AC-2
+          approved_content_hash: 2d2f9cb6f1608f95639eaca685af7d3648a5a1424c7b777ad087441f8fdae35f
+          approved_parent_hash: 8eef7818b90faead838e71b896d7875c8c8c50e7a66d5dc342fbb353fb7d9b5c
+          evidence:
+            tests:
+                - trellis/internal/board::TestStaticStoryMapReadOnlyAcceptance_AT_63
+            recorded_at: "2026-09-03T16:48:31Z"
+        - id: AT-64
+          kind: acceptance_test
+          title: Rejected live move rollback acceptance
+          body: Open real live board, begin dragging a story map card, then delete target activity through another Engine mutation before drop. Assert project-scoped POST returns the complete exhaustive SetMapPosition rejection, board displays every returned error line without truncation or replacement, card returns to its exact prior cell and order, no placement changes, and no external asset is requested.
+          covers:
+            - US-50.AC-3
+          approved_content_hash: 2bfc3cff98556102fb0fa95fe976396f8ba5a48f8fdaa5d9022f50e111ac8ba0
+          approved_parent_hash: 8eef7818b90faead838e71b896d7875c8c8c50e7a66d5dc342fbb353fb7d9b5c
+          evidence:
+            tests:
+                - trellis/internal/board::TestRejectedLiveMoveRollbackAcceptance_AT_64
+            recorded_at: "2026-09-03T16:48:31Z"
+    - id: US-51
+      kind: story
+      title: Placement requires an approved activity
+      body: 'Placing a story (set_map_position, or create_node with placement) requires the target activity to be approved and fresh, mirroring link_dependency''s freshness rule. Activities have no tree and no link, so without this rule an unread activity surfaces only at release. Story approvals stay decoupled: editing an activity leaves placed stories fresh and marks only the activity stale until re-approved.'
+      status: done
+      paths:
+        - internal/core/engine.go
+        - internal/core/placement_test.go
+        - internal/core/placement_hint_test.go
+        - internal/core/storymap_test.go
+        - internal/core/export_test.go
+        - internal/mcpserver/server.go
+        - internal/mcpserver/placement_test.go
+        - internal/mcpserver/placement_hint_test.go
+        - internal/mcpserver/storymap_test.go
+        - internal/board/drag_test.go
+      activity: UA-4
+      rank: 6
+      slice: 4
+      acceptance_criteria:
+        - id: US-51.AC-1
+          given: an activity that is never approved or stale
+          when: set_map_position or create_node with placement targets it
+          then: the call fails naming the activity and its approval state, following CC-2
+        - id: US-51.AC-2
+          given: an activity that is approved and fresh
+          when: a story is placed on it
+          then: placement succeeds as before
+        - id: US-51.AC-3
+          given: a placed story
+          when: the activity's title or body changes
+          then: the story's approval stays fresh and the activity itself reports stale until re-approved
+        - id: US-51.AC-4
+          given: no activity exists
+          when: create_node kind=story runs without placement
+          then: behavior is unchanged
+      depends_on:
+        - target: US-45
+      approved_content_hash: b39c583af3be518c3d77e3c39135d4bf87cba054feb4d57a08380ae594ce6812
+      children:
+        - id: AS-51
+          kind: arch
+          title: Activity approval check at placement boundaries
+          body: 'Engine placement boundaries require the target activity to be approved and fresh before persisting placement. CreateNode with activity_id and slice and SetMapPosition share one activity approval check that distinguishes never approved from stale and reports the concrete activity id under CC-2. Existing activity existence, slice, rank and map complete rules remain intact. Placement remains unhashed story metadata: activity edits invalidate only the activity, never the placed story. Story creation without placement when no activity exists bypasses this rule unchanged. Implementation reuses existing store operations and mutation boundaries; no lock or transaction refactoring.'
+          depends_on:
+            - target: CC-2
+              pinned_hash: 7a4cb090b53f0549fe37d4a5cb836cb1b309ebce9f0a231212ae7f0f62a46f2d
+            - target: CC-5
+              pinned_hash: 86415fa6f5b2e48a8154db3566e4837a145592dbad640f46ea4046b338dfe491
+          approved_content_hash: 0563586d8f954a76460aac71e5766a3bbbab6c320f3fb576c6195cdbc3213288
+          approved_parent_hash: b39c583af3be518c3d77e3c39135d4bf87cba054feb4d57a08380ae594ce6812
+          children:
+            - id: DD-65
+              kind: detail_design
+              title: Shared activity approval check
+              body: Core adds one read-only activity approval check used by SetMapPosition and by CreateNode only when activity_id and slice are supplied. After resolving the concrete activity and before rank allocation or placement writes, the check verifies current approval freshness and returns deterministic violations naming the activity id and whether it is never approved or stale. Existing unknown-activity, placement-pair, slice and placement gate validation remains exhaustive. The check introduces no dependency edge, schema change, lock or transaction change.
+              approved_content_hash: 2f218b0a49e05efefbfc1ee9c42dbfdea77877bf6ab5e70a4e34a1670e5ac94c
+              approved_parent_hash: 0563586d8f954a76460aac71e5766a3bbbab6c320f3fb576c6195cdbc3213288
+              children:
+                - id: UT-66
+                  kind: unit_test
+                  title: Activity approval check unit tests
+                  body: Unit-test both SetMapPosition and CreateNode with placement against never approved, stale, and approved and fresh activities. Assert rejected calls name the concrete activity and exact approval state under CC-2, report all applicable violations deterministically, and make no placement or story write; assert approved and fresh targets preserve existing rank and placement behavior.
+                  approved_content_hash: 2cebcde930cc6ecfdf27d6e57a8adc7537103d3dab70c58a3d8f39005fc5c25a
+                  approved_parent_hash: 2f218b0a49e05efefbfc1ee9c42dbfdea77877bf6ab5e70a4e34a1670e5ac94c
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestPlacementRequiresApprovedActivity_UT_66_IT_56
+                    recorded_at: "2026-09-03T18:01:55Z"
+            - id: DD-66
+              kind: detail_design
+              title: Placement freshness decoupling and compatibility
+              body: Activity remains an unhashed metadata reference on each placed story. Updating activity title or body follows normal approval invalidation for the activity only; no cascade traverses placement references and no story content hash, approval, status or integrity marker changes. CreateNode without placement follows the existing no-activity and map incomplete paths without invoking the activity approval check.
+              approved_content_hash: cb94e8de2a15c3418b496329d7000b6c4742e32fd43975a7e659377702f8fdff
+              approved_parent_hash: 0563586d8f954a76460aac71e5766a3bbbab6c320f3fb576c6195cdbc3213288
+              children:
+                - id: UT-67
+                  kind: unit_test
+                  title: Activity edit decoupling and no-activity compatibility unit tests
+                  body: Unit-test title and body updates on an approved activity with an approved placed story, asserting unchanged story content hash and fresh approval while the activity alone reports stale until re-approved. Unit-test create_node kind=story without placement in a project with no activity, asserting prior behavior and output remain unchanged.
+                  approved_content_hash: 7e64c3bdddf42f0f864f725315ba18f6c8b8b694b8f51dda22481b5acfdf6560
+                  approved_parent_hash: cb94e8de2a15c3418b496329d7000b6c4742e32fd43975a7e659377702f8fdff
+                  evidence:
+                    tests:
+                        - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56/title
+                        - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56/body
+                        - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56
+                    recorded_at: "2026-09-03T18:01:55Z"
+            - id: IT-56
+              kind: integration_test
+              title: Placement activity freshness integration
+              body: 'Engine plus real SQLite store: exercise SetMapPosition and CreateNode with placement against never-approved, stale, re-approved and approved-fresh activities. Verify state-specific exhaustive errors and no writes on rejection, successful placement after approval, existing lane-tail rank allocation, and no story approval invalidation after activity title or body edits.'
+              approved_content_hash: b9978128cda1b0ef7011a7038edbdfb76802db906d58e843beac1826b0e44642
+              approved_parent_hash: 0563586d8f954a76460aac71e5766a3bbbab6c320f3fb576c6195cdbc3213288
+              evidence:
+                tests:
+                    - trellis/internal/core::TestPlacementRequiresApprovedActivity_UT_66_IT_56
+                    - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56/title
+                    - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56/body
+                    - trellis/internal/core::TestActivityEditPlacementDecoupling_UT_67_IT_56
+                recorded_at: "2026-09-03T18:01:55Z"
+            - id: IT-57
+              kind: integration_test
+              title: MCP activity approval check compatibility integration
+              body: 'Through MCP over projects with and without activities: verify both placement entry points expose deterministic CC-2 errors naming target activity and never approved or stale state, approved and fresh placement succeeds, and create_node kind=story without placement retains prior no-activity behavior. Exercise existing mutation boundaries without lock or transaction changes.'
+              approved_content_hash: efe284a4a6734a2ecf94f32216939404c82f52aecc4ab74d0bd7ec8cb95d7117
+              approved_parent_hash: 0563586d8f954a76460aac71e5766a3bbbab6c320f3fb576c6195cdbc3213288
+              evidence:
+                tests:
+                    - trellis/internal/mcpserver::TestNoActivityCreationCompatibility_AT_67_IT_57
+                    - trellis/internal/mcpserver::TestPlacementActivityApprovalAcceptance_AT_65_IT_57
+                    - trellis/internal/mcpserver::TestPlacedStoryActivityFreshnessAcceptance_AT_66_IT_57
+                recorded_at: "2026-09-03T18:01:55Z"
+        - id: AT-65
+          kind: acceptance_test
+          title: Activity approval check acceptance
+          body: Through MCP, target one never approved activity and one stale activity with set_map_position and create_node kind=story with placement. Assert every call fails before writing, names the concrete activity and its never approved or stale state, and follows CC-2. Approve or re-approve each activity, repeat both placement entry points, and assert placement succeeds with existing rank behavior.
+          covers:
+            - US-51.AC-1
+            - US-51.AC-2
+          approved_content_hash: 1c46a7f4072c08f4a8c12b254ae6fe5cc0cdfd88476125929230a554d1bac1ad
+          approved_parent_hash: b39c583af3be518c3d77e3c39135d4bf87cba054feb4d57a08380ae594ce6812
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacementActivityApprovalAcceptance_AT_65_IT_57
+            recorded_at: "2026-09-03T18:01:55Z"
+        - id: AT-66
+          kind: acceptance_test
+          title: Placed story freshness decoupling acceptance
+          body: Through MCP, approve a story placed on an approved activity, then update the activity title and body. Assert the story content hash and approval stay fresh, while get_node reports only the activity stale until its current hash is re-approved.
+          covers:
+            - US-51.AC-3
+          approved_content_hash: 36c204f8d1aac516c8e9c4653df2b6bf6bf69a98053a7034c01de10842b6eeec
+          approved_parent_hash: b39c583af3be518c3d77e3c39135d4bf87cba054feb4d57a08380ae594ce6812
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestPlacedStoryActivityFreshnessAcceptance_AT_66_IT_57
+            recorded_at: "2026-09-03T18:01:55Z"
+        - id: AT-67
+          kind: acceptance_test
+          title: No-activity creation compatibility acceptance
+          body: Through MCP in a project with no activity, call create_node kind=story without placement and assert behavior and output remain unchanged from the existing optional story map contract.
+          covers:
+            - US-51.AC-4
+          approved_content_hash: 025d029e8f1db14acfc459a7fd36a7247ddf3298fd244b05b9a79f85712beab2
+          approved_parent_hash: b39c583af3be518c3d77e3c39135d4bf87cba054feb4d57a08380ae594ce6812
+          evidence:
+            tests:
+                - trellis/internal/mcpserver::TestNoActivityCreationCompatibility_AT_67_IT_57
+            recorded_at: "2026-09-03T18:01:55Z"
