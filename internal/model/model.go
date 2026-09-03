@@ -82,6 +82,8 @@ type Node struct {
 	Status     string   // story only
 	Position   int      // activity only: story map order; metadata, never hashed
 	ActivityID string   // story only: activity in placement; metadata, never hashed
+	Rank       int      // story only: order within activity and slice; metadata, excluded from content hash
+	Slice      int      // story only: release cut on story map; metadata, excluded from content hash
 	// Approval bookkeeping. Empty = never approved.
 	ApprovedContentHash string
 	ApprovedParentHash  string

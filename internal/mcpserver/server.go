@@ -50,8 +50,11 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Project overview: all stories with status and gate readiness, cross-cutting specs, stale nodes."},
 		s.getOverview)
 	mcp.AddTool(srv, &mcp.Tool{Name: "create_node",
-		Description: "Create a spec node. Kinds and required parents: story (none), activity (none; optional position, otherwise appended), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
+		Description: "Create a spec node. Kinds and required parents: story (none; optional activity_id and slice placement), activity (none; optional position, otherwise appended), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
 		s.createNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_map_position",
+		Description: "Place a story in an existing activity and slice; rank appends automatically within that activity and slice. Placement is metadata and does not invalidate approvals."},
+		s.setMapPosition)
 	mcp.AddTool(srv, &mcp.Tool{Name: "update_node",
 		Description: "Update a node's title/body/covers, or an activity's position. Content changes invalidate the node's approval and make children and dependents stale; position is metadata."},
 		s.updateNode)
@@ -118,12 +121,20 @@ func New(engine *core.Engine, version string) *mcp.Server {
 // ---- inputs ----
 
 type createNodeIn struct {
-	Kind     string   `json:"kind" jsonschema:"story | activity | acceptance_test | arch | integration_test | detail_design | unit_test | cross_cutting"`
-	ParentID string   `json:"parent_id,omitempty" jsonschema:"parent node id; omit for story, activity and cross_cutting"`
-	Title    string   `json:"title"`
-	Body     string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
-	Covers   []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
-	Position *int     `json:"position,omitempty" jsonschema:"activity only: integer story map order; omitted appends"`
+	Kind       string   `json:"kind" jsonschema:"story | activity | acceptance_test | arch | integration_test | detail_design | unit_test | cross_cutting"`
+	ParentID   string   `json:"parent_id,omitempty" jsonschema:"parent node id; omit for story, activity and cross_cutting"`
+	Title      string   `json:"title"`
+	Body       string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
+	Covers     []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
+	Position   *int     `json:"position,omitempty" jsonschema:"activity only: integer story map order; omitted appends"`
+	ActivityID string   `json:"activity_id,omitempty" jsonschema:"story only: existing activity id; requires slice"`
+	Slice      *int     `json:"slice,omitempty" jsonschema:"story only: integer release cut at least 1; requires activity_id"`
+}
+
+type setMapPositionIn struct {
+	StoryID    string `json:"story_id"`
+	ActivityID string `json:"activity_id"`
+	Slice      int    `json:"slice" jsonschema:"integer release cut at least 1"`
 }
 
 type updateNodeIn struct {
@@ -236,7 +247,16 @@ func (s *Server) getOverview(_ context.Context, _ *mcp.CallToolRequest, _ any) (
 }
 
 func (s *Server) createNode(_ context.Context, _ *mcp.CallToolRequest, in createNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
-	n, err := s.engine.CreateNodeWithPosition(model.Kind(in.Kind), in.ParentID, in.Title, in.Body, in.Covers, in.Position)
+	n, err := s.engine.CreateNodeWithPlacement(model.Kind(in.Kind), in.ParentID, in.Title, in.Body, in.Covers, in.Position, in.ActivityID, in.Slice)
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	r, err := s.engine.Node(n.ID)
+	return nil, r, err
+}
+
+func (s *Server) setMapPosition(_ context.Context, _ *mcp.CallToolRequest, in setMapPositionIn) (*mcp.CallToolResult, core.NodeReport, error) {
+	n, err := s.engine.SetMapPosition(in.StoryID, in.ActivityID, in.Slice)
 	if err != nil {
 		return nil, core.NodeReport{}, err
 	}

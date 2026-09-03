@@ -105,7 +105,7 @@ func (e *Engine) locked(fn func() error) error {
 
 // ---- node CRUD ----
 
-func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body string, covers []string, position *int) (model.Node, error) {
+func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body string, covers []string, position *int, activityID string, slice *int) (model.Node, error) {
 	if !model.ValidKind(kind) {
 		return model.Node{}, fmt.Errorf("unknown kind %q; valid kinds: story, activity, acceptance_test, arch, integration_test, detail_design, unit_test, cross_cutting", kind)
 	}
@@ -144,6 +144,15 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 	if position != nil && kind != model.KindActivity {
 		return model.Node{}, fmt.Errorf("position is only valid on activity nodes")
 	}
+	placementRequested := activityID != "" || slice != nil
+	if placementRequested && kind != model.KindStory {
+		return model.Node{}, fmt.Errorf("activity_id and slice are only valid on story nodes")
+	}
+	if placementRequested {
+		if err := e.validatePlacement("create_node", activityID, slice); err != nil {
+			return model.Node{}, err
+		}
+	}
 	if len(covers) > 0 && kind != model.KindAcceptanceTest {
 		return model.Node{}, fmt.Errorf("covers is only valid on acceptance_test nodes")
 	}
@@ -168,6 +177,14 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 	}
 	if kind == model.KindStory {
 		n.Status = model.StatusTodo
+		if placementRequested {
+			n.ActivityID = activityID
+			n.Slice = *slice
+			n.Rank, err = e.st.NextStoryRank(e.pid(), activityID, *slice)
+			if err != nil {
+				return model.Node{}, err
+			}
+		}
 	}
 	if kind == model.KindActivity {
 		if position == nil {
@@ -187,6 +204,69 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 		return model.Node{}, err
 	}
 	return e.st.GetNode(e.pid(), n.ID)
+}
+
+func (e *Engine) validatePlacement(operation, activityID string, slice *int) error {
+	activities, err := e.st.ListActivities(e.pid())
+	if err != nil {
+		return err
+	}
+	var violations []string
+	if activityID == "" {
+		violations = append(violations, "activity_id is required when slice is provided")
+	} else {
+		found := false
+		for _, activity := range activities {
+			if activity.ID == activityID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			violations = append(violations, fmt.Sprintf("unknown activity %q", activityID))
+		}
+	}
+	if slice == nil {
+		violations = append(violations, "slice is required when activity_id is provided")
+	} else if *slice < 1 {
+		violations = append(violations, fmt.Sprintf("slice must be at least 1; got %d", *slice))
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+	var candidates []string
+	for _, activity := range activities {
+		candidates = append(candidates, fmt.Sprintf("%s (%s)", activity.ID, activity.Title))
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, "(none)")
+	}
+	return fmt.Errorf("%s placement rejected:\n- %s\nexisting activities:\n- %s", operation, strings.Join(violations, "\n- "), strings.Join(candidates, "\n- "))
+}
+
+func (e *Engine) setMapPositionUnlocked(storyID, activityID string, slice int) (model.Node, error) {
+	story, storyErr := e.st.GetNode(e.pid(), storyID)
+	var violations []string
+	if storyErr != nil {
+		violations = append(violations, storyErr.Error())
+	} else if story.Kind != model.KindStory {
+		violations = append(violations, fmt.Sprintf("%s is a %s, not a story", storyID, story.Kind))
+	}
+	if placementErr := e.validatePlacement("set_map_position", activityID, &slice); placementErr != nil {
+		violations = append(violations, placementErr.Error())
+	}
+	if len(violations) > 0 {
+		return model.Node{}, fmt.Errorf("set_map_position rejected:\n- %s", strings.Join(violations, "\n- "))
+	}
+	rank, err := e.st.NextStoryRank(e.pid(), activityID, slice)
+	if err != nil {
+		return model.Node{}, err
+	}
+	if err := e.st.SetStoryPlacement(e.pid(), storyID, activityID, rank, slice); err != nil {
+		return model.Node{}, err
+	}
+	e.st.AppendEvent(e.pid(), "set_map_position", storyID, fmt.Sprintf("activity=%s rank=%d slice=%d", activityID, rank, slice))
+	return e.st.GetNode(e.pid(), storyID)
 }
 
 func (e *Engine) validateCovers(storyID string, covers []string) error {
@@ -678,10 +758,24 @@ func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, cover
 }
 
 func (e *Engine) CreateNodeWithPosition(kind model.Kind, parentID, title, body string, covers []string, position *int) (model.Node, error) {
+	return e.CreateNodeWithPlacement(kind, parentID, title, body, covers, position, "", nil)
+}
+
+func (e *Engine) CreateNodeWithPlacement(kind model.Kind, parentID, title, body string, covers []string, position *int, activityID string, slice *int) (model.Node, error) {
 	var out model.Node
 	err := e.locked(func() error {
 		var err error
-		out, err = e.createnodeUnlocked(kind, parentID, title, body, covers, position)
+		out, err = e.createnodeUnlocked(kind, parentID, title, body, covers, position, activityID, slice)
+		return err
+	})
+	return out, err
+}
+
+func (e *Engine) SetMapPosition(storyID, activityID string, slice int) (model.Node, error) {
+	var out model.Node
+	err := e.locked(func() error {
+		var err error
+		out, err = e.setMapPositionUnlocked(storyID, activityID, slice)
 		return err
 	})
 	return out, err

@@ -62,6 +62,8 @@ type exportNode struct {
 	Paths               []string        `yaml:"paths,omitempty"`
 	Position            *int            `yaml:"position,omitempty"`
 	ActivityID          string          `yaml:"activity,omitempty"`
+	Rank                *int            `yaml:"rank,omitempty"`
+	Slice               *int            `yaml:"slice,omitempty"`
 	ACs                 []exportAC      `yaml:"acceptance_criteria,omitempty"`
 	DependsOn           []exportDep     `yaml:"depends_on,omitempty"`
 	ApprovedContentHash string          `yaml:"approved_content_hash,omitempty"`
@@ -79,6 +81,10 @@ func (e *Engine) exportNode(n model.Node) (exportNode, error) {
 	if n.Kind == model.KindActivity {
 		position := n.Position
 		en.Position = &position
+	}
+	if n.Kind == model.KindStory && n.ActivityID != "" && n.Rank > 0 && n.Slice > 0 {
+		rank, slice := n.Rank, n.Slice
+		en.Rank, en.Slice = &rank, &slice
 	}
 	if n.Kind == model.KindStory {
 		acs, err := e.st.ListACs(e.pid(), n.ID)
@@ -218,6 +224,12 @@ func Import(st *store.Store, data []byte, proj store.Project) error {
 		}
 		if en.Position != nil {
 			n.Position = *en.Position
+		}
+		if en.Rank != nil {
+			n.Rank = *en.Rank
+		}
+		if en.Slice != nil {
+			n.Slice = *en.Slice
 		}
 		if err := st.InsertNode(n); err != nil {
 			return err

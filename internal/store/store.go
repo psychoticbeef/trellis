@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 	status        TEXT NOT NULL DEFAULT '',
 	position      INTEGER NOT NULL DEFAULT 0,
 	activity_id   TEXT NOT NULL DEFAULT '',
+	rank          INTEGER NOT NULL DEFAULT 0,
+	slice         INTEGER NOT NULL DEFAULT 0,
 	approved_content_hash TEXT NOT NULL DEFAULT '',
 	approved_parent_hash  TEXT NOT NULL DEFAULT '',
 	created_at    TEXT NOT NULL,
@@ -145,7 +147,7 @@ func Open(path string) (*Store, error) {
 	for _, column := range []struct {
 		name    string
 		typeSQL string
-	}{{"position", "INTEGER NOT NULL DEFAULT 0"}, {"activity_id", "TEXT NOT NULL DEFAULT ''"}} {
+	}{{"position", "INTEGER NOT NULL DEFAULT 0"}, {"activity_id", "TEXT NOT NULL DEFAULT ''"}, {"rank", "INTEGER NOT NULL DEFAULT 0"}, {"slice", "INTEGER NOT NULL DEFAULT 0"}} {
 		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE nodes ADD COLUMN %s %s`, column.name, column.typeSQL)); err != nil &&
 			!strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -193,7 +195,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate activity position index: %w", err)
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_story_activity ON nodes(project_id, activity_id) WHERE kind='story' AND activity_id<>''`); err != nil {
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_story_activity ON nodes(project_id, activity_id, slice, rank) WHERE kind='story' AND activity_id<>''`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate story activity index: %w", err)
 	}
@@ -332,13 +334,13 @@ func (s *Store) SetCounter(projectID, scope string, n int) error {
 
 // ---- nodes ----
 
-const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, position, activity_id, approved_content_hash, approved_parent_hash, created_at, updated_at`
+const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, position, activity_id, rank, slice, approved_content_hash, approved_parent_hash, created_at, updated_at`
 
 func scanNode(row interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
 	var covers, paths, created, updated string
 	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &paths, &n.Status,
-		&n.Position, &n.ActivityID, &n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
+		&n.Position, &n.ActivityID, &n.Rank, &n.Slice, &n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
 	if err != nil {
 		return n, err
 	}
@@ -362,9 +364,9 @@ func coversJSON(covers []string) string {
 }
 
 func (s *Store) InsertNode(n model.Node) error {
-	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), stringsJSON(n.Paths), n.Status,
-		n.Position, n.ActivityID, n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
+		n.Position, n.ActivityID, n.Rank, n.Slice, n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
 	if err != nil {
 		return err
 	}
@@ -390,12 +392,24 @@ func (s *Store) SetNodePosition(projectID, id string, position int) error {
 	return err
 }
 
-// SetStoryActivity persists story placement metadata. Backbone tests use this
-// primitive directly; engine exposure arrives with story placement.
+// SetStoryActivity persists backbone activity metadata without rank or slice.
+// Story placement uses SetStoryPlacement.
 func (s *Store) SetStoryActivity(projectID, storyID, activityID string) error {
 	_, err := s.db.Exec(`UPDATE nodes SET activity_id=?, updated_at=? WHERE project_id=? AND id=? AND kind='story'`,
 		activityID, now(), projectID, storyID)
 	return err
+}
+
+func (s *Store) SetStoryPlacement(projectID, storyID, activityID string, rank, slice int) error {
+	res, err := s.db.Exec(`UPDATE nodes SET activity_id=?, rank=?, slice=?, updated_at=? WHERE project_id=? AND id=? AND kind='story'`,
+		activityID, rank, slice, now(), projectID, storyID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("story %q: %w", storyID, ErrNotFound)
+	}
+	return nil
 }
 
 func (s *Store) GetNode(projectID, id string) (model.Node, error) {
@@ -490,7 +504,14 @@ func (s *Store) NextActivityPosition(projectID string) (int, error) {
 }
 
 func (s *Store) ListStoriesByActivity(projectID, activityID string) ([]model.Node, error) {
-	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND kind='story' AND activity_id=? ORDER BY CAST(SUBSTR(id, 4) AS INTEGER)`, projectID, activityID)
+	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND kind='story' AND activity_id=? ORDER BY slice, rank, CAST(SUBSTR(id, 4) AS INTEGER)`, projectID, activityID)
+}
+
+func (s *Store) NextStoryRank(projectID, activityID string, slice int) (int, error) {
+	var rank int
+	err := s.db.QueryRow(`SELECT COALESCE(MAX(rank), 0) + 1 FROM nodes WHERE project_id=? AND kind='story' AND activity_id=? AND slice=?`,
+		projectID, activityID, slice).Scan(&rank)
+	return rank, err
 }
 
 func (s *Store) ListChildren(projectID, parentID string) ([]model.Node, error) {

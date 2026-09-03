@@ -851,7 +851,7 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 		t.Fatal(err)
 	}
 	approve(t, e, activity.ID)
-	if err := st.SetStoryActivity(e.Project.ID, a.story, activity.ID); err != nil {
+	if err := st.SetStoryPlacement(e.Project.ID, a.story, activity.ID, 4, 2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -875,7 +875,7 @@ func TestExportImportIntegration_IT_25(t *testing.T) {
 		t.Fatalf("round trip diverged:\n%s\n---\n%s", doc, doc9)
 	}
 	placed, err := st.GetNode("p9", a.story)
-	if err != nil || placed.ActivityID != activity.ID {
+	if err != nil || placed.ActivityID != activity.ID || placed.Rank != 4 || placed.Slice != 2 {
 		t.Fatalf("story placement did not round trip: node=%+v err=%v", placed, err)
 	}
 	activities, err := st.ListActivities("p9")
