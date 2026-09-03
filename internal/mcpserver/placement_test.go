@@ -51,9 +51,8 @@ func TestPlacementMutationAndProjection_AT_49_IT_46(t *testing.T) {
 	}
 }
 
-// TestNoActivityCreationCompatibility_AT_50_AT_67_IT_57 proves story creation
-// stays placement-optional when no activity exists.
-func TestNoActivityCreationCompatibility_AT_50_AT_67_IT_57(t *testing.T) {
+func assertNoActivityCreationCompatibility(t *testing.T) {
+	t.Helper()
 	cs := client(t)
 	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
 	for _, field := range []string{"activity", "rank", "slice"} {
@@ -63,8 +62,20 @@ func TestNoActivityCreationCompatibility_AT_50_AT_67_IT_57(t *testing.T) {
 	}
 }
 
+// TestOptionalUnmappedStory_AT_50 preserves evidence for optional story
+// creation while the story map is incomplete.
+func TestOptionalUnmappedStory_AT_50(t *testing.T) {
+	assertNoActivityCreationCompatibility(t)
+}
+
+// TestNoActivityCreationCompatibility_AT_67_IT_57 proves story creation stays
+// placement-optional when no activity exists.
+func TestNoActivityCreationCompatibility_AT_67_IT_57(t *testing.T) {
+	assertNoActivityCreationCompatibility(t)
+}
+
 // TestPlacementActivityApprovalAcceptance_AT_65_IT_57 proves both MCP
-// placement entry points reject never-approved and stale activity targets,
+// placement entry points reject never approved and stale activity targets,
 // then succeed after approval.
 func TestPlacementActivityApprovalAcceptance_AT_65_IT_57(t *testing.T) {
 	cs := client(t)
@@ -154,12 +165,26 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	createFound, placementFound := false, false
 	for _, tool := range tools.Tools {
+		if tool.Name == "create_node" {
+			createFound = true
+			blob, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(tool.Description, "approved and fresh activity") || !strings.Contains(string(blob), "approved and fresh activity id") {
+				t.Fatalf("create_node activity approval contract missing: description=%q schema=%s", tool.Description, blob)
+			}
+			continue
+		}
 		if tool.Name != "set_map_position" {
 			continue
 		}
-		found = true
+		placementFound = true
+		if !strings.Contains(tool.Description, "approved and fresh activity") {
+			t.Fatalf("set_map_position activity approval contract missing: %q", tool.Description)
+		}
 		blob, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			t.Fatal(err)
@@ -182,8 +207,8 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 			t.Fatalf("set_map_position output schema=%s", out)
 		}
 	}
-	if !found {
-		t.Fatal("set_map_position tool missing")
+	if !createFound || !placementFound {
+		t.Fatalf("placement tools missing: create_node=%t set_map_position=%t", createFound, placementFound)
 	}
 
 	unmapped := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})

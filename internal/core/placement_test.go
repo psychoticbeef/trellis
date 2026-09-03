@@ -65,7 +65,7 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 }
 
 // TestPlacementRequiresApprovedActivity_UT_66_IT_56 proves both placement
-// boundaries reject never-approved and stale activities before writing, then
+// boundaries reject never approved and stale activities before writing, then
 // retain existing placement behavior after approval.
 func TestPlacementRequiresApprovedActivity_UT_66_IT_56(t *testing.T) {
 	e, st := newEngineStore(t)

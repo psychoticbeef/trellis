@@ -50,10 +50,10 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Project overview: all stories with status and gate readiness, cross-cutting specs, stale nodes."},
 		s.getOverview)
 	mcp.AddTool(srv, &mcp.Tool{Name: "create_node",
-		Description: "Create a spec node. Kinds and required parents: story (none; optional activity_id and slice placement), activity (none; optional position, otherwise appended), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
+		Description: "Create a spec node. Kinds and required parents: story (none; optional activity_id and slice placement targeting an approved and fresh activity), activity (none; optional position, otherwise appended), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
 		s.createNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "set_map_position",
-		Description: "Place a story in an existing activity and slice; rank appends automatically within that activity and slice. Placement is metadata and does not invalidate approvals."},
+		Description: "Place a story in an approved and fresh activity and slice; rank appends automatically within that activity and slice. Placement is metadata and does not invalidate approvals."},
 		s.setMapPosition)
 	mcp.AddTool(srv, &mcp.Tool{Name: "update_node",
 		Description: "Update a node's title/body/covers, or an activity's position. Content changes invalidate the node's approval and make children and dependents stale; position is metadata."},
@@ -127,7 +127,7 @@ type createNodeIn struct {
 	Body       string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
 	Covers     []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
 	Position   *int     `json:"position,omitempty" jsonschema:"activity only: integer story map order; omitted appends"`
-	ActivityID string   `json:"activity_id,omitempty" jsonschema:"story only: existing activity id; requires slice"`
+	ActivityID string   `json:"activity_id,omitempty" jsonschema:"story only: approved and fresh activity id; requires slice"`
 	Slice      *int     `json:"slice,omitempty" jsonschema:"story only: integer release cut at least 1; requires activity_id"`
 }
 

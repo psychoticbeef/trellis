@@ -547,6 +547,23 @@ func TestLiveMapPositionEndpoint_IT_54(t *testing.T) {
 		t.Fatalf("invalid integration request mutated placement: before=%+v after=%+v", beforeReject, afterReject)
 	}
 
+	staleBody := "changed after approval"
+	if _, err := fixture.engine.UpdateNode(fixture.secondActivityID, nil, &staleBody, nil); err != nil {
+		t.Fatal(err)
+	}
+	staleStatus, staleBodyJSON := postMapPosition(t, srv.Client(), srv.URL+"/p/p1/map-position", mapPositionRequest{
+		StoryID: fixture.storyID, ActivityID: fixture.secondActivityID, Slice: 4,
+	})
+	var staleRejection map[string]string
+	if staleStatus != http.StatusBadRequest || json.Unmarshal([]byte(staleBodyJSON), &staleRejection) != nil ||
+		!strings.Contains(staleRejection["error"], "activity "+fixture.secondActivityID+" is stale") {
+		t.Fatalf("stale activity rejection status=%d body=%s", staleStatus, staleBodyJSON)
+	}
+	if got := placement(t, fixture.store, "p1", fixture.storyID); got.ActivityID != afterReject.ActivityID || got.Rank != afterReject.Rank || got.Slice != afterReject.Slice {
+		t.Fatalf("stale activity rejection mutated placement: before=%+v after=%+v", afterReject, got)
+	}
+	approveMapActivity(t, fixture.engine, fixture.secondActivityID)
+
 	unlock, err := fixture.store.LockProject("p1")
 	if err != nil {
 		t.Fatal(err)
@@ -752,6 +769,22 @@ func TestLiveStoryMapMoveAcceptance_AT_62(t *testing.T) {
 	endAt := strings.Index(string(page)[cellAt:], "</td>")
 	if cellAt < 0 || cardAt < 0 || cardAt > endAt {
 		t.Fatalf("reloaded board lacks moved card in %s", cell)
+	}
+
+	staleBody := "changed after approval"
+	if _, err := fixture.engine.UpdateNode(fixture.secondActivityID, nil, &staleBody, nil); err != nil {
+		t.Fatal(err)
+	}
+	beforeReject := placement(t, fixture.store, "p1", fixture.storyID)
+	rejectStatus, rejectBody := postMapPosition(t, srv.Client(), srv.URL+"/p/p1/map-position", mapPositionRequest{
+		StoryID: fixture.storyID, ActivityID: fixture.secondActivityID, Slice: 3,
+	})
+	if rejectStatus != http.StatusBadRequest || !strings.Contains(rejectBody, "activity "+fixture.secondActivityID+" is stale") {
+		t.Fatalf("stale activity live rejection status=%d body=%s", rejectStatus, rejectBody)
+	}
+	afterReject := placement(t, fixture.store, "p1", fixture.storyID)
+	if afterReject.ActivityID != beforeReject.ActivityID || afterReject.Rank != beforeReject.Rank || afterReject.Slice != beforeReject.Slice {
+		t.Fatalf("stale activity live rejection changed placement: before=%+v after=%+v", beforeReject, afterReject)
 	}
 }
 
