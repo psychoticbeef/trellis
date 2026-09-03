@@ -247,12 +247,22 @@ func (s *Server) getOverview(_ context.Context, _ *mcp.CallToolRequest, _ any) (
 }
 
 func (s *Server) createNode(_ context.Context, _ *mcp.CallToolRequest, in createNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
-	n, err := s.engine.CreateNodeWithPlacement(model.Kind(in.Kind), in.ParentID, in.Title, in.Body, in.Covers, in.Position, in.ActivityID, in.Slice)
+	kind := model.Kind(in.Kind)
+	n, err := s.engine.CreateNodeWithPlacement(kind, in.ParentID, in.Title, in.Body, in.Covers, in.Position, in.ActivityID, in.Slice)
 	if err != nil {
 		return nil, core.NodeReport{}, err
 	}
 	r, err := s.engine.Node(n.ID)
-	return nil, r, err
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	if kind == model.KindStory && in.ActivityID == "" && in.Slice == nil {
+		r.PlacementHint, err = s.engine.PlacementHint(in.Title, in.Body)
+		if err != nil {
+			return nil, core.NodeReport{}, err
+		}
+	}
+	return nil, r, nil
 }
 
 func (s *Server) setMapPosition(_ context.Context, _ *mcp.CallToolRequest, in setMapPositionIn) (*mcp.CallToolResult, core.NodeReport, error) {

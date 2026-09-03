@@ -32,6 +32,36 @@ type StoryMapOverview struct {
 	Gaps             []StoryMapGap   `json:"gaps"`
 }
 
+func deriveStoryMapGaps(activities, stories []model.Node) []StoryMapGap {
+	knownActivities := make(map[string]bool, len(activities))
+	for _, activity := range activities {
+		knownActivities[activity.ID] = true
+	}
+	highestSlice := 0
+	occupied := make(map[string]map[int]bool, len(activities))
+	for _, story := range stories {
+		if !storyHasPlacement(story, knownActivities) {
+			continue
+		}
+		if occupied[story.ActivityID] == nil {
+			occupied[story.ActivityID] = map[int]bool{}
+		}
+		occupied[story.ActivityID][story.Slice] = true
+		if story.Slice > highestSlice {
+			highestSlice = story.Slice
+		}
+	}
+	gaps := []StoryMapGap{}
+	for _, activity := range activities {
+		for slice := 1; slice <= highestSlice; slice++ {
+			if !occupied[activity.ID][slice] {
+				gaps = append(gaps, StoryMapGap{ActivityID: activity.ID, Slice: slice})
+			}
+		}
+	}
+	return gaps
+}
+
 func idLess(a, b string) bool {
 	if len(a) != len(b) {
 		return len(a) < len(b)
@@ -82,8 +112,7 @@ func buildStoryMapOverview(activities, stories []model.Node, summaries []StorySu
 	}
 	sort.Slice(unmapped, func(i, j int) bool { return idLess(unmapped[i].ID, unmapped[j].ID) })
 
-	gaps := []StoryMapGap{}
-	for i, activity := range activities {
+	for i := range activities {
 		counts := make(map[int]SliceProgress, highestSlice)
 		for slice := 1; slice <= highestSlice; slice++ {
 			counts[slice] = SliceProgress{Slice: slice}
@@ -99,9 +128,6 @@ func buildStoryMapOverview(activities, stories []model.Node, summaries []StorySu
 		for slice := 1; slice <= highestSlice; slice++ {
 			progress := counts[slice]
 			groups[i].SliceProgress = append(groups[i].SliceProgress, progress)
-			if progress.Total == 0 {
-				gaps = append(gaps, StoryMapGap{ActivityID: activity.ID, Slice: slice})
-			}
 		}
 	}
 	groups = append(groups, StoryMapGroup{Unmapped: true, Stories: unmapped})
@@ -114,5 +140,5 @@ func buildStoryMapOverview(activities, stories []model.Node, summaries []StorySu
 	if len(unmappedIDs) > 0 {
 		status = fmt.Sprintf("%d unmapped", len(unmappedIDs))
 	}
-	return StoryMapOverview{Status: status, UnmappedStoryIDs: unmappedIDs, Groups: groups, Gaps: gaps}
+	return StoryMapOverview{Status: status, UnmappedStoryIDs: unmappedIDs, Groups: groups, Gaps: deriveStoryMapGaps(activities, stories)}
 }

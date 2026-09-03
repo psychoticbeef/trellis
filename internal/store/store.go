@@ -876,6 +876,34 @@ func (s *Store) SearchFTS(projectID, query string) ([]FTSHit, error) {
 	return out, rows.Err()
 }
 
+// SearchActivityFTS returns at most limit matching activity ids. Relevance is
+// primary; activity position and numeric id make equal scores deterministic.
+func (s *Store) SearchActivityFTS(projectID, query string, limit int) ([]string, error) {
+	match := buildFTSQuery(query)
+	if match == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT n.id
+		FROM specs_fts
+		JOIN nodes n ON n.project_id=specs_fts.project_id AND n.id=specs_fts.node_id
+		WHERE specs_fts MATCH ? AND specs_fts.project_id=? AND n.kind='activity'
+		ORDER BY bm25(specs_fts), n.position, CAST(SUBSTR(n.id, 4) AS INTEGER)
+		LIMIT ?`, match, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // reindexNode rewrites a node's FTS row from title, body and (for stories)
 // its acceptance-criterion text.
 func (s *Store) reindexNode(projectID, nodeID string) error {
