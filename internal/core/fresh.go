@@ -311,6 +311,7 @@ type NodeReport struct {
 	Covers   []string      `json:"covers,omitempty"`
 	Paths    []string      `json:"paths,omitempty"`
 	Status   string        `json:"status,omitempty"`
+	Position *int          `json:"position,omitempty"`
 	Hash     string        `json:"content_hash"`
 	Fresh    bool          `json:"fresh"`
 	Problems []string      `json:"problems,omitempty"`
@@ -345,6 +346,10 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 	r := NodeReport{
 		ID: n.ID, Kind: string(n.Kind), ParentID: n.ParentID, Title: n.Title, Body: n.Body,
 		Covers: n.Covers, Paths: n.Paths, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+	}
+	if n.Kind == model.KindActivity {
+		position := n.Position
+		r.Position = &position
 	}
 	if model.TestSpecKinds[n.Kind] {
 		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
@@ -402,6 +407,12 @@ type StorySummary struct {
 	Usage                     string `json:"usage,omitempty"`
 }
 
+type ActivitySummary struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Position int    `json:"position"`
+}
+
 type CCSummary struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
@@ -421,13 +432,14 @@ type CoverageFile struct {
 }
 
 type Overview struct {
-	Project      string           `json:"project"`
-	Description  string           `json:"description,omitempty"`
-	Coverage     *CoverageSummary `json:"coverage,omitempty"`
-	Stories      []StorySummary   `json:"stories"`
-	CrossCutting []CCSummary      `json:"cross_cutting"`
-	Glossary     []store.TermDef  `json:"glossary"`
-	StaleNodes   []string         `json:"stale_nodes"`
+	Project      string            `json:"project"`
+	Description  string            `json:"description,omitempty"`
+	Coverage     *CoverageSummary  `json:"coverage,omitempty"`
+	Activities   []ActivitySummary `json:"activities,omitempty"`
+	Stories      []StorySummary    `json:"stories"`
+	CrossCutting []CCSummary       `json:"cross_cutting"`
+	Glossary     []store.TermDef   `json:"glossary"`
+	StaleNodes   []string          `json:"stale_nodes"`
 }
 
 func (e *Engine) Overview() (Overview, error) {
@@ -456,6 +468,13 @@ func (e *Engine) Overview() (Overview, error) {
 			}
 		}
 		o.Coverage = cs
+	}
+	activities, err := e.st.ListActivities(e.pid())
+	if err != nil {
+		return o, err
+	}
+	for _, activity := range activities {
+		o.Activities = append(o.Activities, ActivitySummary{ID: activity.ID, Title: activity.Title, Position: activity.Position})
 	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {

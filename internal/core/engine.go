@@ -105,9 +105,9 @@ func (e *Engine) locked(fn func() error) error {
 
 // ---- node CRUD ----
 
-func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
+func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body string, covers []string, position *int) (model.Node, error) {
 	if !model.ValidKind(kind) {
-		return model.Node{}, fmt.Errorf("unknown kind %q; valid kinds: story, acceptance_test, arch, integration_test, detail_design, unit_test, cross_cutting", kind)
+		return model.Node{}, fmt.Errorf("unknown kind %q; valid kinds: story, activity, acceptance_test, arch, integration_test, detail_design, unit_test, cross_cutting", kind)
 	}
 	if strings.TrimSpace(title) == "" {
 		return model.Node{}, fmt.Errorf("title must not be empty")
@@ -141,6 +141,9 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 		return model.Node{}, fmt.Errorf("kind %s is a root node and must not have a parent", kind)
 	}
 
+	if position != nil && kind != model.KindActivity {
+		return model.Node{}, fmt.Errorf("position is only valid on activity nodes")
+	}
 	if len(covers) > 0 && kind != model.KindAcceptanceTest {
 		return model.Node{}, fmt.Errorf("covers is only valid on acceptance_test nodes")
 	}
@@ -165,6 +168,16 @@ func (e *Engine) createnodeUnlocked(kind model.Kind, parentID, title, body strin
 	}
 	if kind == model.KindStory {
 		n.Status = model.StatusTodo
+	}
+	if kind == model.KindActivity {
+		if position == nil {
+			n.Position, err = e.st.NextActivityPosition(e.pid())
+			if err != nil {
+				return model.Node{}, err
+			}
+		} else {
+			n.Position = *position
+		}
 	}
 	if err := e.st.InsertNode(n); err != nil {
 		return model.Node{}, err
@@ -208,14 +221,21 @@ func (e *Engine) validateCovers(storyID string, covers []string) error {
 // UpdateNode applies a partial content update. Nil fields stay unchanged.
 // Approval invalidation is implicit: the content hash changes, so the node is
 // no longer approved and all children/dependents go stale.
-func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]string) (model.Node, error) {
+func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]string, position *int) (model.Node, error) {
 	n, err := e.st.GetNode(e.pid(), id)
 	if err != nil {
 		return model.Node{}, err
 	}
-	if title == nil && body == nil && covers == nil {
+	if title == nil && body == nil && covers == nil && position == nil {
+		if n.Kind == model.KindActivity {
+			return model.Node{}, fmt.Errorf("nothing to update: provide title, body, covers and/or position")
+		}
 		return model.Node{}, fmt.Errorf("nothing to update: provide title, body and/or covers")
 	}
+	if position != nil && n.Kind != model.KindActivity {
+		return model.Node{}, fmt.Errorf("position is only valid on activity nodes; %s is kind %s", n.ID, n.Kind)
+	}
+	contentChanged := title != nil || body != nil || covers != nil
 	if title != nil {
 		if strings.TrimSpace(*title) == "" {
 			return model.Node{}, fmt.Errorf("title must not be empty")
@@ -234,12 +254,29 @@ func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]st
 		}
 		n.Covers = *covers
 	}
-	if err := e.st.UpdateNodeContent(n); err != nil {
+	if position != nil {
+		n.Position = *position
+	}
+	switch {
+	case contentChanged && position != nil:
+		err = e.st.UpdateNodeContentAndPosition(n)
+	case contentChanged:
+		err = e.st.UpdateNodeContent(n)
+	default:
+		err = e.st.SetNodePosition(e.pid(), n.ID, n.Position)
+	}
+	if err != nil {
 		return model.Node{}, err
 	}
-	e.st.AppendEvent(e.pid(), "update", n.ID, "content changed")
-	if err := e.downgradeAffected(n, "node "+n.ID+" edited"); err != nil {
-		return model.Node{}, err
+	detail := "position changed"
+	if contentChanged {
+		detail = "content changed"
+	}
+	e.st.AppendEvent(e.pid(), "update", n.ID, detail)
+	if contentChanged {
+		if err := e.downgradeAffected(n, "node "+n.ID+" edited"); err != nil {
+			return model.Node{}, err
+		}
 	}
 	return e.st.GetNode(e.pid(), n.ID)
 }
@@ -263,6 +300,15 @@ func (e *Engine) deletenodeUnlocked(id string) error {
 	}
 	for _, d := range dependents {
 		blocks = append(blocks, fmt.Sprintf("dependent %s", d.NodeID))
+	}
+	if n.Kind == model.KindActivity {
+		stories, err := e.st.ListStoriesByActivity(e.pid(), id)
+		if err != nil {
+			return err
+		}
+		for _, story := range stories {
+			blocks = append(blocks, fmt.Sprintf("placed story %s", story.ID))
+		}
 	}
 	if len(blocks) > 0 {
 		return fmt.Errorf("delete blocked: %s is referenced by %s; delete or relink those first", id, strings.Join(blocks, ", "))
@@ -623,20 +669,28 @@ func short(hash string) string {
 }
 
 func (e *Engine) CreateNode(kind model.Kind, parentID, title, body string, covers []string) (model.Node, error) {
+	return e.CreateNodeWithPosition(kind, parentID, title, body, covers, nil)
+}
+
+func (e *Engine) CreateNodeWithPosition(kind model.Kind, parentID, title, body string, covers []string, position *int) (model.Node, error) {
 	var out model.Node
 	err := e.locked(func() error {
 		var err error
-		out, err = e.createnodeUnlocked(kind, parentID, title, body, covers)
+		out, err = e.createnodeUnlocked(kind, parentID, title, body, covers, position)
 		return err
 	})
 	return out, err
 }
 
 func (e *Engine) UpdateNode(id string, title, body *string, covers *[]string) (model.Node, error) {
+	return e.UpdateNodeWithPosition(id, title, body, covers, nil)
+}
+
+func (e *Engine) UpdateNodeWithPosition(id string, title, body *string, covers *[]string, position *int) (model.Node, error) {
 	var out model.Node
 	err := e.locked(func() error {
 		var err error
-		out, err = e.updatenodeUnlocked(id, title, body, covers)
+		out, err = e.updatenodeUnlocked(id, title, body, covers, position)
 		return err
 	})
 	return out, err

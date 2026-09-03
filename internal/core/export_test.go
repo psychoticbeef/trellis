@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"trellis/internal/model"
 	"trellis/internal/store"
 )
 
@@ -32,6 +33,14 @@ func TestExportFormat_UT_26(t *testing.T) {
 	if _, err := e.AddAC(s.ID, "a 'given'", "w\nmultiline", "t"); err != nil {
 		t.Fatal(err)
 	}
+	position := 0
+	activity, err := e.CreateNodeWithPosition(model.KindActivity, "", "activity: zero", "", nil, &position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStoryActivity("p1", s.ID, activity.ID); err != nil {
+		t.Fatal(err)
+	}
 	doc, err := e.ExportYAML()
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +61,11 @@ func TestExportFormat_UT_26(t *testing.T) {
 	if doc != doc2 {
 		t.Fatalf("round trip diverged:\n--- original ---\n%s\n--- reimport ---\n%s", doc, doc2)
 	}
+	if !strings.Contains(doc, "activities:") || !strings.Contains(doc, "position: 0") || !strings.Contains(doc, "activity: UA-1") {
+		t.Fatalf("activity placement missing from export:\n%s", doc)
+	}
 
-	// Counters preserved: the next story id continues, never reuses.
+	// Counters preserved: new story and activity ids continue, never reuse.
 	e2b, _ := NewEngine(st, "p2")
 	n, err := e2b.CreateNode("story", "", "next", "", nil)
 	if err != nil {
@@ -61,6 +73,13 @@ func TestExportFormat_UT_26(t *testing.T) {
 	}
 	if n.ID != "US-2" {
 		t.Fatalf("counter not preserved: new story id %s, want US-2", n.ID)
+	}
+	a, err := e2b.CreateNode(model.KindActivity, "", "next activity", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID != "UA-2" {
+		t.Fatalf("activity counter not preserved: new activity id %s, want UA-2", a.ID)
 	}
 
 	// Version rejection.

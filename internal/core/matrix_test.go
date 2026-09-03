@@ -27,7 +27,7 @@ func newMemEngine(t *testing.T) *core.Engine {
 }
 
 // TestParentKindMatrix_UT_1 proves UT-1 (DD-1 "Tree rule validation"):
-// the full parent/child legality matrix for all seven kinds, the
+// the full parent/child legality matrix for all eight kinds, the
 // arch-singleton rule and id allocation monotonicity, directly against the
 // engine with an in-memory store.
 func TestParentKindMatrix_UT_1(t *testing.T) {
@@ -42,6 +42,7 @@ func TestParentKindMatrix_UT_1(t *testing.T) {
 	dd := mustCreate(t, e, model.KindDetailDesign, arch.ID, "dd", nil)
 	ut := mustCreate(t, e, model.KindUnitTest, dd.ID, "ut", nil)
 	cc := mustCreate(t, e, model.KindCrossCutting, "", "cc", nil)
+	activity := mustCreate(t, e, model.KindActivity, "", "activity", nil)
 
 	parents := map[model.Kind]string{
 		model.KindStory:           story.ID,
@@ -51,6 +52,7 @@ func TestParentKindMatrix_UT_1(t *testing.T) {
 		model.KindDetailDesign:    dd.ID,
 		model.KindUnitTest:        ut.ID,
 		model.KindCrossCutting:    cc.ID,
+		model.KindActivity:        activity.ID,
 	}
 	legalParent := map[model.Kind]model.Kind{
 		model.KindAcceptanceTest:  model.KindStory,
@@ -59,7 +61,7 @@ func TestParentKindMatrix_UT_1(t *testing.T) {
 		model.KindDetailDesign:    model.KindArch,
 		model.KindUnitTest:        model.KindDetailDesign,
 	}
-	kinds := []model.Kind{model.KindStory, model.KindAcceptanceTest, model.KindArch,
+	kinds := []model.Kind{model.KindStory, model.KindActivity, model.KindAcceptanceTest, model.KindArch,
 		model.KindIntegrationTest, model.KindDetailDesign, model.KindUnitTest, model.KindCrossCutting}
 
 	for _, child := range kinds {
