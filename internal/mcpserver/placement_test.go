@@ -151,4 +151,6 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 		"set_map_position placement rejected", "unknown activity", build, ship)
 	callErr(t, cs, "set_map_position", map[string]any{"story_id": placed["id"], "activity_id": build, "slice": 0},
 		"set_map_position placement rejected", "slice must be at least 1", build, ship)
+	callErr(t, cs, "set_map_position", map[string]any{"story_id": "US-999", "activity_id": "UA-999", "slice": 0},
+		"set_map_position rejected", "US-999", "not found", "unknown activity", "slice must be at least 1", build, ship)
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // TestStoryPlacementEngine_UT_50 proves validation, optional story creation,
-// and lane-scoped append ranking.
+// and append ranking scoped by activity and slice.
 func TestStoryPlacementEngine_UT_50(t *testing.T) {
 	e := newEngine(t)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
@@ -33,7 +33,7 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 		t.Fatal(err)
 	}
 	if one.Rank != 1 || two.Rank != 2 || otherSlice.Rank != 1 || otherActivity.Rank != 1 {
-		t.Fatalf("lane-scoped ranks: one=%+v two=%+v slice=%+v activity=%+v", one, two, otherSlice, otherActivity)
+		t.Fatalf("ranks scoped by activity and slice: one=%+v two=%+v slice=%+v activity=%+v", one, two, otherSlice, otherActivity)
 	}
 	moved, err := e.SetMapPosition(one.ID, build.ID, 1)
 	if err != nil {
@@ -49,8 +49,8 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 
 	_, err = e.SetMapPosition(one.ID, "UA-999", 0)
 	wantErr(t, err, "set_map_position placement rejected", "unknown activity \"UA-999\"", "slice must be at least 1", build.ID, ship.ID)
-	_, err = e.SetMapPosition("US-999", build.ID, 1)
-	wantErr(t, err, "US-999", "not found")
+	_, err = e.SetMapPosition("US-999", "UA-999", 0)
+	wantErr(t, err, "set_map_position rejected", "US-999", "not found", "unknown activity", "slice must be at least 1", build.ID, ship.ID)
 	_, err = e.CreateNodeWithPlacement(model.KindStory, "", "missing slice", "", nil, nil, build.ID, nil)
 	wantErr(t, err, "slice is required", build.ID, ship.ID)
 	_, err = e.CreateNodeWithPlacement(model.KindStory, "", "missing activity", "", nil, nil, "", intPtr(1))

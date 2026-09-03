@@ -245,15 +245,18 @@ func (e *Engine) validatePlacement(operation, activityID string, slice *int) err
 }
 
 func (e *Engine) setMapPositionUnlocked(storyID, activityID string, slice int) (model.Node, error) {
-	story, err := e.st.GetNode(e.pid(), storyID)
-	if err != nil {
-		return model.Node{}, err
+	story, storyErr := e.st.GetNode(e.pid(), storyID)
+	var violations []string
+	if storyErr != nil {
+		violations = append(violations, storyErr.Error())
+	} else if story.Kind != model.KindStory {
+		violations = append(violations, fmt.Sprintf("%s is a %s, not a story", storyID, story.Kind))
 	}
-	if story.Kind != model.KindStory {
-		return model.Node{}, fmt.Errorf("%s is a %s, not a story", storyID, story.Kind)
+	if placementErr := e.validatePlacement("set_map_position", activityID, &slice); placementErr != nil {
+		violations = append(violations, placementErr.Error())
 	}
-	if err := e.validatePlacement("set_map_position", activityID, &slice); err != nil {
-		return model.Node{}, err
+	if len(violations) > 0 {
+		return model.Node{}, fmt.Errorf("set_map_position rejected:\n- %s", strings.Join(violations, "\n- "))
 	}
 	rank, err := e.st.NextStoryRank(e.pid(), activityID, slice)
 	if err != nil {
