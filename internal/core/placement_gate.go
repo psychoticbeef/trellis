@@ -13,7 +13,6 @@ import (
 // on every guarded call. It is deliberately never stored.
 type placementGateState struct {
 	activities []model.Node
-	stories    []model.Node
 	unmapped   []model.Node
 	openSlices []int
 	complete   bool
@@ -36,7 +35,7 @@ func makePlacementGateState(activities, stories []model.Node) placementGateState
 	for _, activity := range activities {
 		knownActivities[activity.ID] = true
 	}
-	state := placementGateState{activities: activities, stories: stories}
+	state := placementGateState{activities: activities}
 	for _, story := range stories {
 		if !storyHasPlacement(story, knownActivities) {
 			state.unmapped = append(state.unmapped, story)

@@ -73,6 +73,10 @@ func TestPlacementGateAcceptance_AT_52_IT_47(t *testing.T) {
 
 	callErr(t, cs, "create_node", map[string]any{"kind": "story", "title": "blocked"},
 		"create_node placement gate rejected", "map complete", activity, "Build", "open slices", "1", "2", "3")
+	third := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "placed after rejection", "activity_id": activity, "slice": 3})
+	if third["id"] != "US-3" {
+		t.Fatalf("rejected create consumed story id: %v", third)
+	}
 	callErr(t, cs, "set_map_position", map[string]any{"story_id": first, "activity_id": "", "slice": 0},
 		"set_map_position placement gate rejected", "map complete", first, activity, "open slices")
 	placed := call(t, cs, "get_node", map[string]any{"id": first})

@@ -66,28 +66,61 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 // derivation without a flag, exhaustive candidates, and map-incomplete
 // compatibility.
 func TestPlacementGateState_UT_52_UT_57_IT_47(t *testing.T) {
-	e := newEngine(t)
-	first := mustCreate(t, e, model.KindStory, "", "first unmapped", nil)
-	activity := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+	t.Run("activities with zero stories", func(t *testing.T) {
+		e, st := newEngineStore(t)
+		build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+		ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+		beforeCounters, _ := st.ListCounters(e.Project.ID)
+		beforeEvents, _ := st.ListEvents(e.Project.ID, 1000)
 
-	// Existing unmapped story means map incomplete: old creation behavior stays.
+		_, err := e.CreateNode(model.KindStory, "", "blocked", "", nil)
+		wantErr(t, err, "create_node placement gate rejected", "map complete",
+			"activities:\n- "+build.ID+" (Build)\n- "+ship.ID+" (Ship)", "open slices:\n- 1")
+		afterCounters, _ := st.ListCounters(e.Project.ID)
+		afterEvents, _ := st.ListEvents(e.Project.ID, 1000)
+		if !reflect.DeepEqual(beforeCounters, afterCounters) || !reflect.DeepEqual(beforeEvents, afterEvents) {
+			t.Fatalf("rejected create wrote state: counters %v -> %v, events %v -> %v", beforeCounters, afterCounters, beforeEvents, afterEvents)
+		}
+	})
+
+	e, st := newEngineStore(t)
+	first := mustCreate(t, e, model.KindStory, "", "first unmapped", nil)
+	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+
+	// Existing unmapped story means map incomplete: old behavior stays for
+	// story creation and placement-clear validation.
 	second := mustCreate(t, e, model.KindStory, "", "second unmapped", nil)
-	if _, err := e.SetMapPosition(first.ID, activity.ID, 1); err != nil {
+	_, err := e.SetMapPosition(first.ID, "", 0)
+	wantErr(t, err, "activity_id is required", "slice must be at least 1")
+	if strings.Contains(err.Error(), "placement gate") {
+		t.Fatalf("map-incomplete clear gained placement gate: %v", err)
+	}
+	if _, err := e.SetMapPosition(first.ID, build.ID, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.SetMapPosition(second.ID, activity.ID, 3); err != nil {
+	if _, err := e.SetMapPosition(second.ID, build.ID, 3); err != nil {
 		t.Fatal(err)
 	}
 
 	// Placement of last unmapped story changes next call immediately. No flag.
-	_, err := e.CreateNode(model.KindStory, "", "blocked", "", nil)
-	wantErr(t, err, "create_node placement gate rejected", "map complete", activity.ID, "Build", "open slices", "1", "3", "4")
+	beforeCounters, _ := st.ListCounters(e.Project.ID)
+	beforeEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	_, err = e.CreateNode(model.KindStory, "", "blocked", "", nil)
+	wantErr(t, err, "create_node placement gate rejected", "map complete",
+		"activities:\n- "+build.ID+" (Build)\n- "+ship.ID+" (Ship)", "open slices:\n- 1\n- 3\n- 4")
+	afterCounters, _ := st.ListCounters(e.Project.ID)
+	afterEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	if !reflect.DeepEqual(beforeCounters, afterCounters) || !reflect.DeepEqual(beforeEvents, afterEvents) {
+		t.Fatalf("rejected create wrote state: counters %v -> %v, events %v -> %v", beforeCounters, afterCounters, beforeEvents, afterEvents)
+	}
+
 	before, err := e.Node(first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = e.SetMapPosition(first.ID, "", 0)
-	wantErr(t, err, "set_map_position placement gate rejected", "map complete", first.ID, activity.ID, "open slices")
+	wantErr(t, err, "set_map_position placement gate rejected", "map complete", first.ID, build.ID, ship.ID, "open slices")
 	after, err := e.Node(first.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -96,18 +129,21 @@ func TestPlacementGateState_UT_52_UT_57_IT_47(t *testing.T) {
 		t.Fatalf("rejected clear changed placement: before=%+v after=%+v", before, after)
 	}
 
-	// Data alone returns project to no-map state; unmapped creation works again.
+	// Permitted deletions return project to map incomplete; next call derives it.
 	if err := e.DeleteNode(first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.DeleteNode(second.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.DeleteNode(activity.ID); err != nil {
+	if err := e.DeleteNode(build.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DeleteNode(ship.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.CreateNode(model.KindStory, "", "allowed again", "", nil); err != nil {
-		t.Fatalf("no-map behavior changed: %v", err)
+		t.Fatalf("map-incomplete behavior changed: %v", err)
 	}
 }
 
