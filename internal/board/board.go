@@ -42,6 +42,11 @@ type storyView struct {
 	Status           string
 	StatusCl         string
 	Marker           string
+	Mapped           bool
+	Activity         string
+	ActivityTitle    string
+	Rank             int
+	Slice            int
 	ACs              []acView
 	Children         []nodeView
 	Blocked          []string
@@ -117,6 +122,31 @@ type columnView struct {
 	Cards []cardView
 }
 
+type mapCardView struct {
+	ID       string
+	Title    string
+	Marker   string
+	Usage    string
+	Status   string
+	StatusCl string
+	Rank     int
+}
+
+type mapColumnView struct {
+	ID    string
+	Title string
+}
+
+type mapCellView struct {
+	ActivityID string
+	Cards      []mapCardView
+}
+
+type mapRowView struct {
+	Slice int
+	Cells []mapCellView
+}
+
 type covView struct {
 	TotalPct string
 	Gaps     []covGap
@@ -129,14 +159,19 @@ type covGap struct {
 }
 
 type page struct {
-	Project  string
-	Desc     string
-	Coverage *covView
-	Stamp    string
-	Columns  []columnView
-	Stories  []storyView
-	CCs      []ccView
-	Glossary []termView
+	Project       string
+	Desc          string
+	Coverage      *covView
+	Stamp         string
+	Columns       []columnView
+	Stories       []storyView
+	CCs           []ccView
+	Glossary      []termView
+	HasStoryMap   bool
+	MapStatus     string
+	MapColumns    []mapColumnView
+	MapRows       []mapRowView
+	UnmappedCards []mapCardView
 }
 
 var kindNames = map[string]string{
@@ -218,6 +253,14 @@ func Render(e *core.Engine) (string, error) {
 	}
 	tf := newTermifier(overview.Glossary)
 	p := page{Project: e.Project.ID, Desc: e.Project.Description, Stamp: time.Now().Format("2006-01-02 15:04")}
+	activityTitles := make(map[string]string, len(overview.Activities))
+	for _, activity := range overview.Activities {
+		activityTitles[activity.ID] = activity.Title
+	}
+	p.HasStoryMap = overview.StoryMap != nil
+	if p.HasStoryMap {
+		p.MapStatus = overview.StoryMap.Status
+	}
 	if overview.Coverage != nil {
 		cv := &covView{TotalPct: fmt.Sprintf("%.1f%%", overview.Coverage.TotalPct)}
 		for _, g := range overview.Coverage.Gaps {
@@ -251,6 +294,13 @@ func Render(e *core.Engine) (string, error) {
 			Blocked: tree.Integrity, Paths: story.Paths,
 			TokensMain: s.TokensMain, TokensSubagents: s.TokensSubagents,
 		}
+		if activityTitle, known := activityTitles[s.Activity]; known && s.Rank != nil && s.Slice != nil {
+			sv.Mapped = true
+			sv.Activity = s.Activity
+			sv.ActivityTitle = activityTitle
+			sv.Rank = *s.Rank
+			sv.Slice = *s.Slice
+		}
 		if s.TokensMainInput != nil {
 			sv.CategorizedUsage = []usageRowView{
 				{Agent: "main-agent", Input: tokenValue(*s.TokensMainInput), Output: tokenValue(*s.TokensMainOutput), CacheRead: tokenValue(*s.TokensMainCacheRead), CacheWrite: tokenValue(*s.TokensMainCacheWrite)},
@@ -270,6 +320,9 @@ func Render(e *core.Engine) (string, error) {
 		}
 		p.Stories = append(p.Stories, sv)
 	}
+	if p.HasStoryMap {
+		p.MapColumns, p.MapRows, p.UnmappedCards = projectStoryMap(overview.StoryMap, p.Stories)
+	}
 	// Kanban columns in lifecycle order; every story lands in its column.
 	order := []string{"todo", "refined", "in_progress", "done"}
 	byStatus := map[string]*columnView{}
@@ -288,6 +341,81 @@ func Render(e *core.Engine) (string, error) {
 		return "", err
 	}
 	return b.String(), nil
+}
+
+func projectStoryMap(storyMap *core.StoryMapOverview, stories []storyView) ([]mapColumnView, []mapRowView, []mapCardView) {
+	storyByID := make(map[string]storyView, len(stories))
+	for _, story := range stories {
+		storyByID[story.ID] = story
+	}
+	cardFor := func(summary core.StorySummary) mapCardView {
+		story := storyByID[summary.ID]
+		rank := 0
+		if summary.Rank != nil {
+			rank = *summary.Rank
+		}
+		return mapCardView{
+			ID: summary.ID, Title: story.Title, Marker: story.Marker, Usage: story.Usage,
+			Status: story.Status, StatusCl: story.StatusCl, Rank: rank,
+		}
+	}
+
+	columns := make([]mapColumnView, 0, len(storyMap.Groups))
+	byCell := make(map[string]map[int][]mapCardView)
+	usedSlices := map[int]bool{}
+	unmapped := []mapCardView{}
+	for _, group := range storyMap.Groups {
+		if group.Unmapped {
+			for _, summary := range group.Stories {
+				unmapped = append(unmapped, cardFor(summary))
+			}
+			continue
+		}
+		if group.Activity == nil {
+			continue
+		}
+		activityID := group.Activity.ID
+		columns = append(columns, mapColumnView{ID: activityID, Title: group.Activity.Title})
+		byCell[activityID] = make(map[int][]mapCardView)
+		for _, summary := range group.Stories {
+			if summary.Slice == nil {
+				continue
+			}
+			slice := *summary.Slice
+			usedSlices[slice] = true
+			byCell[activityID][slice] = append(byCell[activityID][slice], cardFor(summary))
+		}
+	}
+
+	slices := make([]int, 0, len(usedSlices))
+	for slice := range usedSlices {
+		slices = append(slices, slice)
+	}
+	sort.Ints(slices)
+	rows := make([]mapRowView, 0, len(slices))
+	for _, slice := range slices {
+		row := mapRowView{Slice: slice, Cells: make([]mapCellView, 0, len(columns))}
+		for _, column := range columns {
+			cards := byCell[column.ID][slice]
+			sort.Slice(cards, func(i, j int) bool {
+				if cards[i].Rank != cards[j].Rank {
+					return cards[i].Rank < cards[j].Rank
+				}
+				return naturalStoryIDLess(cards[i].ID, cards[j].ID)
+			})
+			row.Cells = append(row.Cells, mapCellView{ActivityID: column.ID, Cards: cards})
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(unmapped, func(i, j int) bool { return naturalStoryIDLess(unmapped[i].ID, unmapped[j].ID) })
+	return columns, rows, unmapped
+}
+
+func naturalStoryIDLess(left, right string) bool {
+	if len(left) != len(right) {
+		return len(left) < len(right)
+	}
+	return left < right
 }
 
 func nodeStale(n core.TreeNode) bool {
@@ -425,7 +553,21 @@ a { color: var(--accent); }
 a.term { color: inherit; text-decoration: underline dotted var(--accent); text-underline-offset: 2px; }
 .kanban { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 28px; }
 @media (max-width: 720px) { .kanban { grid-template-columns: repeat(2, 1fr); } }
-.col { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
+{{if .HasStoryMap}}.board-tabs { display: flex; gap: 6px; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
+.board-tab { border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); padding: 8px 14px; cursor: pointer; font: inherit; font-weight: 600; }
+.board-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+.board-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.board-panel[hidden] { display: none; }
+.map-scroll { overflow-x: auto; margin: 0 0 28px; }
+.map-grid { min-width: 720px; margin: 0; table-layout: fixed; }
+.map-grid th, .map-grid td { border: 1px solid var(--line); padding: 10px; vertical-align: top; }
+.map-grid thead th { background: var(--accent-soft); color: var(--ink); text-transform: none; letter-spacing: normal; font-size: 0.88rem; }
+.map-grid .map-slice { width: 82px; color: var(--muted); background: var(--surface); white-space: nowrap; }
+.map-grid td { background: var(--surface); }
+.map-grid .map-unmapped { background: var(--ground); }
+.map-card .state { display: block; margin-top: 5px; }
+.map-card:last-child { margin-bottom: 0; }
+{{end}}.col { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
 .colh { margin: 0 0 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; display: flex; justify-content: space-between; }
 .count { color: var(--muted); font-weight: 400; }
 .scard { display: block; width: 100%; text-align: left; font: inherit; background: var(--ground); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 0 0 8px; color: var(--ink); cursor: pointer; font-size: 0.88rem; line-height: 1.35; }
@@ -453,12 +595,17 @@ a.term:hover { color: var(--accent); }
 {{if .Desc}}<p class="desc">{{.Desc}}</p>{{end}}
 <p class="sub">Project <span class="mono">{{.Project}}</span> · generated {{.Stamp}}</p>
 <button type="button" class="context-open" data-context-open aria-controls="project-context">Project context</button>
-<div class="kanban">
+{{if .HasStoryMap}}<div class="board-tabs" role="tablist" aria-label="Board views"><button type="button" class="board-tab" id="board-tab-overview" role="tab" aria-selected="true" aria-controls="board-panel-overview" tabindex="0" data-board-tab="overview">Overview</button><button type="button" class="board-tab" id="board-tab-map" role="tab" aria-selected="false" aria-controls="board-panel-map" tabindex="-1" data-board-tab="map">Map</button></div>
+<div class="board-panel" id="board-panel-overview" role="tabpanel" aria-labelledby="board-tab-overview" data-board-panel="overview">{{end}}<div class="kanban">
 {{range .Columns}}<div class="col"><h3 class="colh st-{{.Cl}}">{{.Label}}<span class="count">{{len .Cards}}</span></h3>
 {{range .Cards}}<button type="button" class="scard" data-story-open="{{.ID}}" aria-controls="story-{{.ID}}"><span class="mono">{{.ID}}</span><span class="card-title">{{.Title}}</span><span class="mark card-marker {{.Marker}}">{{.Marker}}</span>{{if .Usage}}<span class="meta mono">{{.Usage}}</span>{{end}}</button>
 {{end}}</div>{{end}}
 </div>
-</div>
+{{if .HasStoryMap}}</div>
+<div class="board-panel" id="board-panel-map" role="tabpanel" aria-labelledby="board-tab-map" data-board-panel="map" hidden><p class="meta">{{.MapStatus}}</p><div class="map-scroll"><table class="map-grid"><thead><tr><th scope="col" class="map-slice">Slice</th>{{range .MapColumns}}<th scope="col" data-map-activity="{{.ID}}"><span class="mono">{{.ID}}</span> {{.Title}}</th>{{end}}<th scope="col" data-map-unmapped>Unmapped</th></tr></thead><tbody>
+{{if .MapRows}}{{range $rowIndex, $row := .MapRows}}<tr data-map-slice="{{$row.Slice}}"><th scope="row" class="map-slice">Slice {{$row.Slice}}</th>{{range $row.Cells}}<td data-map-cell="{{.ActivityID}}:{{$row.Slice}}">{{range .Cards}}<button type="button" class="scard map-card" data-story-open="{{.ID}}" aria-controls="story-{{.ID}}"><span class="mono">{{.ID}}</span><span class="card-title">{{.Title}}</span><span class="state st-{{.StatusCl}}">{{.Status}}</span><span class="mark card-marker {{.Marker}}">{{.Marker}}</span>{{if .Usage}}<span class="meta mono">{{.Usage}}</span>{{end}}</button>{{end}}</td>{{end}}{{if eq $rowIndex 0}}<td class="map-unmapped" data-map-unmapped-cell rowspan="{{len $.MapRows}}">{{range $.UnmappedCards}}<button type="button" class="scard map-card" data-story-open="{{.ID}}" aria-controls="story-{{.ID}}"><span class="mono">{{.ID}}</span><span class="card-title">{{.Title}}</span><span class="state st-{{.StatusCl}}">{{.Status}}</span><span class="mark card-marker {{.Marker}}">{{.Marker}}</span>{{if .Usage}}<span class="meta mono">{{.Usage}}</span>{{end}}</button>{{end}}</td>{{end}}</tr>
+{{end}}{{else}}<tr><th scope="row" class="map-slice">No slices</th>{{range .MapColumns}}<td data-map-cell="{{.ID}}:empty"></td>{{end}}<td class="map-unmapped" data-map-unmapped-cell>{{range .UnmappedCards}}<button type="button" class="scard map-card" data-story-open="{{.ID}}" aria-controls="story-{{.ID}}"><span class="mono">{{.ID}}</span><span class="card-title">{{.Title}}</span><span class="state st-{{.StatusCl}}">{{.Status}}</span><span class="mark card-marker {{.Marker}}">{{.Marker}}</span>{{if .Usage}}<span class="meta mono">{{.Usage}}</span>{{end}}</button>{{end}}</td></tr>
+{{end}}</tbody></table></div></div>{{end}}</div>
 
 <div class="modal" id="project-context" data-modal role="dialog" aria-modal="true" aria-labelledby="project-context-title" hidden><article class="story-detail">
 <header class="story-detail-head"><h2 id="project-context-title">Project context</h2><button type="button" class="story-detail-close" data-modal-close aria-label="Close project context">Close</button></header>
@@ -479,7 +626,8 @@ a.term:hover { color: var(--accent); }
 <div class="modal" id="story-{{.ID}}" data-modal data-story-detail="{{.ID}}" role="dialog" aria-modal="true" aria-labelledby="story-title-{{.ID}}" hidden>
 <article class="story-detail">
 <header class="story-detail-head"><div><span class="mono nid">{{.ID}}</span><h2 id="story-title-{{.ID}}">{{.Title}}</h2><span class="state st-{{.StatusCl}}">{{.Status}}</span><span class="mark {{if eq .Marker "fresh"}}ok{{else if eq .Marker "blocked"}}blocked{{else}}stale{{end}}">{{.Marker}}</span></div><button type="button" class="story-detail-close" data-modal-close aria-label="Close story detail">Close</button></header>
-<div class="story-detail-section"><h3>Description</h3><p class="storybody">{{.BodyHTML}}</p></div>
+{{if $.HasStoryMap}}<div class="story-detail-section" data-story-placement="{{.ID}}"><h3>Placement</h3>{{if .Mapped}}<p class="meta"><span data-placement-activity><span class="mono">{{.Activity}}</span> {{.ActivityTitle}}</span> · rank <span class="mono" data-placement-rank>{{.Rank}}</span> · slice <span class="mono" data-placement-slice>{{.Slice}}</span></p>{{else}}<p class="meta" data-placement-unmapped>unmapped</p>{{end}}</div>
+{{end}}<div class="story-detail-section"><h3>Description</h3><p class="storybody">{{.BodyHTML}}</p></div>
 <div class="story-detail-section"><h3>Declared paths</h3>{{if .Paths}}<p class="meta"><span class="mono">{{join .Paths}}</span></p>{{else}}<p class="meta">none declared</p>{{end}}</div>
 <div class="story-detail-section"><h3>Token usage</h3>{{if .Usage}}<p class="meta mono">{{.Usage}}</p>{{else}}<p class="meta">not reported</p>{{end}}
 {{if or .TokensMain .TokensSubagents}}<p class="meta">uncategorized token usage: main-agent <span class="mono">{{if .TokensMain}}{{.TokensMain}}{{else}}0{{end}}</span> · subagents <span class="mono">{{if .TokensSubagents}}{{.TokensSubagents}}{{else}}0{{end}}</span></p>{{end}}
@@ -494,7 +642,33 @@ a.term:hover { color: var(--accent); }
 </div>
 <script>
 (function () {
-	var activeTrigger = null;
+{{if .HasStoryMap}}	var boardTabs = Array.prototype.slice.call(document.querySelectorAll('[data-board-tab]'));
+	function activateBoardTab(tab, moveFocus) {
+		boardTabs.forEach(function (candidate) {
+			var selected = candidate === tab;
+			candidate.setAttribute('aria-selected', selected ? 'true' : 'false');
+			candidate.setAttribute('tabindex', selected ? '0' : '-1');
+			var panel = document.querySelector('[data-board-panel="' + candidate.getAttribute('data-board-tab') + '"]');
+			if (panel) panel.hidden = !selected;
+		});
+		if (moveFocus) tab.focus();
+	}
+	boardTabs.forEach(function (tab) {
+		tab.addEventListener('click', function () { activateBoardTab(tab, false); });
+	});
+	document.addEventListener('keydown', function (event) {
+		var tab = event.target.closest && event.target.closest('[data-board-tab]');
+		if (!tab) return;
+		var index = boardTabs.indexOf(tab);
+		if (event.key === 'ArrowRight') index = (index + 1) % boardTabs.length;
+		else if (event.key === 'ArrowLeft') index = (index - 1 + boardTabs.length) % boardTabs.length;
+		else if (event.key === 'Home') index = 0;
+		else if (event.key === 'End') index = boardTabs.length - 1;
+		else return;
+		event.preventDefault();
+		activateBoardTab(boardTabs[index], true);
+	});
+{{end}}	var activeTrigger = null;
 	var overview = document.getElementById('board-overview');
 	function setOverviewInert(inert) {
 		overview.inert = inert;

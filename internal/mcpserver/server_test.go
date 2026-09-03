@@ -573,6 +573,27 @@ func withoutBoardStamp(html string) string {
 	return html[:start] + html[start+end:]
 }
 
+func boardCardMarker(html, storyID string) string {
+	start := strings.Index(html, `data-story-open="`+storyID+`"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(html[start:], "</button>")
+	if end < 0 {
+		return ""
+	}
+	card := html[start : start+end]
+	marker := strings.Index(card, `class="mark card-marker `)
+	if marker < 0 {
+		return ""
+	}
+	markerEnd := strings.Index(card[marker:], "</span>")
+	if markerEnd < 0 {
+		return ""
+	}
+	return card[marker : marker+markerEnd]
+}
+
 // TestDescriptionAcceptance_AT_28 proves AT-28 (US-24 "Project
 // description") through MCP plus the rendered surfaces.
 func TestDescriptionAcceptance_AT_28(t *testing.T) {
@@ -1035,16 +1056,17 @@ func TestActivityReferenceAcceptance_AT_48_UT_47(t *testing.T) {
 
 	approveMCP(t, cs, story1)
 	before := call(t, cs, "get_tree", map[string]any{"story_id": story1})
-	boardBefore := withoutBoardStamp(renderBoard(t, cs))
+	// Activity title belongs in map output now; isolate lifecycle card marker.
+	markerBefore := boardCardMarker(renderBoard(t, cs), story1)
 	call(t, cs, "update_node", map[string]any{"id": activity, "title": "Build products", "body": "new"})
 	after := call(t, cs, "get_tree", map[string]any{"story_id": story1})
-	boardAfter := withoutBoardStamp(renderBoard(t, cs))
+	markerAfter := boardCardMarker(renderBoard(t, cs), story1)
 	beforeStory := before["story"].(map[string]any)
 	afterStory := after["story"].(map[string]any)
 	if beforeStory["content_hash"] != afterStory["content_hash"] || beforeStory["fresh"] != afterStory["fresh"] || fmt.Sprint(before["blocking_problems"]) != fmt.Sprint(after["blocking_problems"]) {
 		t.Fatalf("activity edit changed story content hash, approval freshness, or blocking problems:\nbefore=%v\nafter=%v", before, after)
 	}
-	if boardAfter != boardBefore {
-		t.Fatal("activity edit changed placed story integrity marker on board")
+	if markerBefore == "" || markerAfter != markerBefore {
+		t.Fatalf("activity edit changed placed story integrity marker on board: before=%q after=%q", markerBefore, markerAfter)
 	}
 }
