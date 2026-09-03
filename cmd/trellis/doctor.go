@@ -6,15 +6,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"trellis/internal/gitops"
+	"trellis/internal/model"
 	"trellis/internal/store"
 )
 
 type finding struct {
 	name    string
-	level   string // ok | warn | fail
+	level   string // ok | info | warn | fail
 	hint    string
 	fixable bool
 	fix     func() // rewrites a trellis-owned artifact
@@ -112,6 +114,83 @@ func doctorChecks(p store.Project) []finding {
 	return fs
 }
 
+func storyMapDoctorFindings(activities, stories []model.Node) []finding {
+	if len(activities) == 0 {
+		if len(stories) < 10 {
+			return nil
+		}
+		return []finding{{
+			name: "story map", level: "info",
+			hint: fmt.Sprintf("%d stories and no activities — consider creating a story map", len(stories)),
+		}}
+	}
+
+	knownActivities := make(map[string]bool, len(activities))
+	for _, activity := range activities {
+		knownActivities[activity.ID] = true
+	}
+	findings := []finding{}
+	for _, activity := range activities {
+		hasSliceOne := false
+		for _, story := range stories {
+			if story.ActivityID == activity.ID && story.Rank > 0 && story.Slice == 1 {
+				hasSliceOne = true
+				break
+			}
+		}
+		if !hasSliceOne {
+			findings = append(findings, finding{
+				name: "story map", level: "info",
+				hint: fmt.Sprintf("walking skeleton gap: activity %s %q has no story in slice 1", activity.ID, activity.Title),
+			})
+		}
+	}
+
+	unmapped := []string{}
+	for _, story := range stories {
+		if !knownActivities[story.ActivityID] || story.Rank < 1 || story.Slice < 1 {
+			unmapped = append(unmapped, story.ID)
+		}
+	}
+	sort.Slice(unmapped, func(i, j int) bool {
+		if len(unmapped[i]) != len(unmapped[j]) {
+			return len(unmapped[i]) < len(unmapped[j])
+		}
+		return unmapped[i] < unmapped[j]
+	})
+	for _, storyID := range unmapped {
+		findings = append(findings, finding{name: "story map", level: "info", hint: "unmapped story: " + storyID})
+	}
+	if len(unmapped) > 0 {
+		findings = append(findings, finding{
+			name: "story map", level: "info",
+			hint: "placement gate activates when no unmapped stories remain",
+		})
+	}
+	return findings
+}
+
+func printDoctorFindings(findings []finding, fix bool) (fixed, fails int) {
+	for _, f := range findings {
+		if fix && f.level == "fail" && f.fixable {
+			f.fix()
+			fixed++
+			fmt.Printf("%-24s FIXED\n", f.name)
+			continue
+		}
+		mark := map[string]string{"ok": "ok", "info": "INFO", "warn": "WARN", "fail": "FAIL"}[f.level]
+		line := fmt.Sprintf("%-24s %s", f.name, mark)
+		if f.hint != "" {
+			line += "  — " + f.hint
+		}
+		fmt.Println(line)
+		if f.level == "fail" {
+			fails++
+		}
+	}
+	return fixed, fails
+}
+
 func cmdDoctor(args []string) error {
 	// Accept --fix in any position (flag stops at the first positional arg).
 	fixFlag := false
@@ -138,28 +217,16 @@ func cmdDoctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	findings := doctorChecks(p)
-	fixed := 0
-	for _, f := range findings {
-		if *fix && f.level == "fail" && f.fixable {
-			f.fix()
-			fixed++
-			fmt.Printf("%-24s FIXED\n", f.name)
-			continue
-		}
-		mark := map[string]string{"ok": "ok", "warn": "WARN", "fail": "FAIL"}[f.level]
-		line := fmt.Sprintf("%-24s %s", f.name, mark)
-		if f.hint != "" {
-			line += "  — " + f.hint
-		}
-		fmt.Println(line)
+	activities, err := st.ListActivities(p.ID)
+	if err != nil {
+		return err
 	}
-	fails := 0
-	for _, f := range findings {
-		if f.level == "fail" && !(*fix && f.fixable) {
-			fails++
-		}
+	stories, err := st.ListNodesByKind(p.ID, model.KindStory)
+	if err != nil {
+		return err
 	}
+	findings := append(doctorChecks(p), storyMapDoctorFindings(activities, stories)...)
+	fixed, fails := printDoctorFindings(findings, *fix)
 	if fixed > 0 {
 		fmt.Printf("%d artifact(s) repaired\n", fixed)
 	}
