@@ -313,24 +313,25 @@ func (e *Engine) treeNode(n model.Node, full bool) (TreeNode, error) {
 }
 
 type NodeReport struct {
-	ID       string        `json:"id"`
-	Kind     string        `json:"kind"`
-	ParentID string        `json:"parent_id,omitempty"`
-	Title    string        `json:"title"`
-	Body     string        `json:"body"`
-	Covers   []string      `json:"covers,omitempty"`
-	Paths    []string      `json:"paths,omitempty"`
-	Status   string        `json:"status,omitempty"`
-	Position *int          `json:"position,omitempty"`
-	Activity string        `json:"activity,omitempty"`
-	Rank     *int          `json:"rank,omitempty"`
-	Slice    *int          `json:"slice,omitempty"`
-	Hash     string        `json:"content_hash"`
-	Fresh    bool          `json:"fresh"`
-	Problems []string      `json:"problems,omitempty"`
-	Deps     []NodeDep     `json:"depends_on,omitempty"`
-	Evidence *EvidenceInfo `json:"evidence,omitempty"`
-	ACs      []ACInfo      `json:"acceptance_criteria,omitempty"`
+	ID            string         `json:"id"`
+	Kind          string         `json:"kind"`
+	ParentID      string         `json:"parent_id,omitempty"`
+	Title         string         `json:"title"`
+	Body          string         `json:"body"`
+	Covers        []string       `json:"covers,omitempty"`
+	Paths         []string       `json:"paths,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	Position      *int           `json:"position,omitempty"`
+	Activity      string         `json:"activity,omitempty"`
+	Rank          *int           `json:"rank,omitempty"`
+	Slice         *int           `json:"slice,omitempty"`
+	Hash          string         `json:"content_hash"`
+	Fresh         bool           `json:"fresh"`
+	Problems      []string       `json:"problems,omitempty"`
+	Deps          []NodeDep      `json:"depends_on,omitempty"`
+	Evidence      *EvidenceInfo  `json:"evidence,omitempty"`
+	ACs           []ACInfo       `json:"acceptance_criteria,omitempty"`
+	PlacementHint *PlacementHint `json:"placement_hint,omitempty"`
 }
 
 type NodeDep struct {
