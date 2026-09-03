@@ -104,8 +104,17 @@ func status(t *testing.T, e *core.Engine, storyID string) string {
 func TestTreeRules_IT_1(t *testing.T) {
 	e := newEngine(t)
 	story := mustCreate(t, e, model.KindStory, "", "s", nil)
+	activity, err := e.CreateNode(model.KindActivity, "", "activity", "", nil)
+	if err != nil || activity.ID != "UA-1" || activity.Position != 1 {
+		t.Fatalf("create activity root: %+v err=%v", activity, err)
+	}
+	_, err = e.CreateNode(model.KindActivity, story.ID, "nested activity", "", nil)
+	wantErr(t, err, "root node")
+	position := 2
+	_, err = e.CreateNodeWithPosition(model.KindStory, "", "positioned story", "", nil, &position)
+	wantErr(t, err, "position is only valid on activity")
 
-	_, err := e.CreateNode(model.KindStory, story.ID, "sub story", "", nil)
+	_, err = e.CreateNode(model.KindStory, story.ID, "sub story", "", nil)
 	wantErr(t, err, "root node")
 
 	_, err = e.CreateNode(model.KindAcceptanceTest, story.ID, "at", "", nil)

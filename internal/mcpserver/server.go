@@ -50,13 +50,16 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Project overview: all stories with status and gate readiness, cross-cutting specs, stale nodes."},
 		s.getOverview)
 	mcp.AddTool(srv, &mcp.Tool{Name: "create_node",
-		Description: "Create a spec node. Kinds and required parents: story (none), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
+		Description: "Create a spec node. Kinds and required parents: story (none; optional activity_id and slice placement targeting an approved and fresh activity), activity (none; optional position, otherwise appended), acceptance_test (story, needs covers), arch (story, exactly one), integration_test (arch), detail_design (arch), unit_test (detail_design), cross_cutting (none)."},
 		s.createNode)
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_map_position",
+		Description: "Place a story in an approved and fresh activity and slice; rank appends automatically within that activity and slice. Placement is metadata and does not invalidate approvals."},
+		s.setMapPosition)
 	mcp.AddTool(srv, &mcp.Tool{Name: "update_node",
-		Description: "Update a node's title/body/covers. Invalidates the node's approval and makes all children and dependents stale."},
+		Description: "Update a node's title/body/covers, or an activity's position. Content changes invalidate the node's approval and make children and dependents stale; position is metadata."},
 		s.updateNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_node",
-		Description: "Delete a node. Blocked while it has children or dependents."},
+		Description: "Delete a node. Blocked while it has children or dependents, or while an activity has placed stories."},
 		s.deleteNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_node",
 		Description: "Full content of one node incl. content_hash (needed for approve) and current hashes of its dependencies."},
@@ -118,18 +121,28 @@ func New(engine *core.Engine, version string) *mcp.Server {
 // ---- inputs ----
 
 type createNodeIn struct {
-	Kind     string   `json:"kind" jsonschema:"story | acceptance_test | arch | integration_test | detail_design | unit_test | cross_cutting"`
-	ParentID string   `json:"parent_id,omitempty" jsonschema:"parent node id; omit for story and cross_cutting"`
-	Title    string   `json:"title"`
-	Body     string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
-	Covers   []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
+	Kind       string   `json:"kind" jsonschema:"story | activity | acceptance_test | arch | integration_test | detail_design | unit_test | cross_cutting"`
+	ParentID   string   `json:"parent_id,omitempty" jsonschema:"parent node id; omit for story, activity and cross_cutting"`
+	Title      string   `json:"title"`
+	Body       string   `json:"body,omitempty" jsonschema:"spec text (markdown)"`
+	Covers     []string `json:"covers,omitempty" jsonschema:"acceptance_test only: AC ids this test proves, e.g. [\"US-1.AC-1\"]"`
+	Position   *int     `json:"position,omitempty" jsonschema:"activity only: integer story map order; omitted appends"`
+	ActivityID string   `json:"activity_id,omitempty" jsonschema:"story only: approved and fresh activity id; requires slice"`
+	Slice      *int     `json:"slice,omitempty" jsonschema:"story only: integer release cut at least 1; requires activity_id"`
+}
+
+type setMapPositionIn struct {
+	StoryID    string `json:"story_id"`
+	ActivityID string `json:"activity_id"`
+	Slice      int    `json:"slice" jsonschema:"integer release cut at least 1"`
 }
 
 type updateNodeIn struct {
-	ID     string    `json:"id"`
-	Title  *string   `json:"title,omitempty"`
-	Body   *string   `json:"body,omitempty"`
-	Covers *[]string `json:"covers,omitempty"`
+	ID       string    `json:"id"`
+	Title    *string   `json:"title,omitempty"`
+	Body     *string   `json:"body,omitempty"`
+	Covers   *[]string `json:"covers,omitempty"`
+	Position *int      `json:"position,omitempty" jsonschema:"activity only: integer story map order"`
 }
 
 type idIn struct {
@@ -234,7 +247,26 @@ func (s *Server) getOverview(_ context.Context, _ *mcp.CallToolRequest, _ any) (
 }
 
 func (s *Server) createNode(_ context.Context, _ *mcp.CallToolRequest, in createNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
-	n, err := s.engine.CreateNode(model.Kind(in.Kind), in.ParentID, in.Title, in.Body, in.Covers)
+	kind := model.Kind(in.Kind)
+	n, err := s.engine.CreateNodeWithPlacement(kind, in.ParentID, in.Title, in.Body, in.Covers, in.Position, in.ActivityID, in.Slice)
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	r, err := s.engine.Node(n.ID)
+	if err != nil {
+		return nil, core.NodeReport{}, err
+	}
+	if kind == model.KindStory && in.ActivityID == "" && in.Slice == nil {
+		r.PlacementHint, err = s.engine.PlacementHint(in.Title, in.Body)
+		if err != nil {
+			return nil, core.NodeReport{}, err
+		}
+	}
+	return nil, r, nil
+}
+
+func (s *Server) setMapPosition(_ context.Context, _ *mcp.CallToolRequest, in setMapPositionIn) (*mcp.CallToolResult, core.NodeReport, error) {
+	n, err := s.engine.SetMapPosition(in.StoryID, in.ActivityID, in.Slice)
 	if err != nil {
 		return nil, core.NodeReport{}, err
 	}
@@ -243,7 +275,7 @@ func (s *Server) createNode(_ context.Context, _ *mcp.CallToolRequest, in create
 }
 
 func (s *Server) updateNode(_ context.Context, _ *mcp.CallToolRequest, in updateNodeIn) (*mcp.CallToolResult, core.NodeReport, error) {
-	n, err := s.engine.UpdateNode(in.ID, in.Title, in.Body, in.Covers)
+	n, err := s.engine.UpdateNodeWithPosition(in.ID, in.Title, in.Body, in.Covers, in.Position)
 	if err != nil {
 		return nil, core.NodeReport{}, err
 	}

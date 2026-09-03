@@ -37,6 +37,7 @@ func clientFor(t *testing.T, p store.Project) *mcp.ClientSession {
 		t.Fatal(err)
 	}
 	lastEngine = nil
+	lastStore = st
 	engine, err := core.NewEngine(st, p.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -167,9 +168,16 @@ func TestNodeLifecycleAcceptance_AT_1(t *testing.T) {
 	}
 	arch := call(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": "US-1", "title": "as"})
 	call(t, cs, "create_node", map[string]any{"kind": "detail_design", "parent_id": arch["id"], "title": "dd"})
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "activity"})
+	if activity["id"] != "UA-1" || activity["position"] != float64(1) {
+		t.Fatalf("activity root = %v", activity)
+	}
+	call(t, cs, "update_node", map[string]any{"id": "UA-1", "position": 2})
 
 	// Each illegal structural move names its violated rule.
 	callErr(t, cs, "create_node", map[string]any{"kind": "story", "parent_id": "US-1", "title": "x"},
+		"root node")
+	callErr(t, cs, "create_node", map[string]any{"kind": "activity", "parent_id": "US-1", "title": "x"},
 		"root node")
 	callErr(t, cs, "create_node", map[string]any{"kind": "arch", "parent_id": "US-1", "title": "x"},
 		"exactly one arch spec", "AS-1")
@@ -536,7 +544,10 @@ func TestGlossaryAcceptance_AT_25(t *testing.T) {
 
 // lastEngine lets acceptance tests reach the engine behind the MCP session
 // for surfaces that are human-facing (the board), not part of the tool API.
-var lastEngine *core.Engine
+var (
+	lastEngine *core.Engine
+	lastStore  *store.Store
+)
 
 func renderBoard(t *testing.T, _ *mcp.ClientSession) string {
 	t.Helper()
@@ -548,6 +559,39 @@ func renderBoard(t *testing.T, _ *mcp.ClientSession) string {
 		t.Fatal(err)
 	}
 	return html
+}
+
+func withoutBoardStamp(html string) string {
+	start := strings.Index(html, " · generated ")
+	if start < 0 {
+		return html
+	}
+	end := strings.Index(html[start:], "</p>")
+	if end < 0 {
+		return html
+	}
+	return html[:start] + html[start+end:]
+}
+
+func boardCardMarker(html, storyID string) string {
+	start := strings.Index(html, `data-story-open="`+storyID+`"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(html[start:], "</button>")
+	if end < 0 {
+		return ""
+	}
+	card := html[start : start+end]
+	marker := strings.Index(card, `class="mark card-marker `)
+	if marker < 0 {
+		return ""
+	}
+	markerEnd := strings.Index(card[marker:], "</span>")
+	if markerEnd < 0 {
+		return ""
+	}
+	return card[marker : marker+markerEnd]
 }
 
 // TestDescriptionAcceptance_AT_28 proves AT-28 (US-24 "Project
@@ -643,6 +687,7 @@ func clientOnPath(t *testing.T, path, projectID string) *mcp.ClientSession {
 		t.Fatal(err)
 	}
 	lastEngine = engine
+	lastStore = st
 	ct, srvT := mcp.NewInMemoryTransports()
 	srv := mcpserver.New(engine, "test")
 	ctx := context.Background()
@@ -916,5 +961,112 @@ func TestNextAcceptance_AT_39(t *testing.T) {
 	if len(out.Blocked) != 1 || out.Blocked[0]["id"] != waiting ||
 		!strings.Contains(fmt.Sprint(out.Blocked[0]["waiting_on"]), pre+" (todo)") {
 		t.Fatalf("blocked: %v", out.Blocked)
+	}
+}
+
+// TestActivityBackboneAcceptance_AT_47_UT_47_IT_44 proves compatibility
+// without an activity and automatic, position-ordered activity creation.
+func TestActivityBackboneAcceptance_AT_47_UT_47_IT_44(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-b", "develop")
+	for name, content := range map[string]string{
+		".gitignore":     "reports/\n",
+		"report-src.xml": `<?xml version="1.0"?><testsuite></testsuite>`,
+		"README.md":      "meta",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "initial")
+	cs := clientFor(t, store.Project{ID: "p1", Name: "test", RepoPath: repo, BaseBranch: "develop",
+		TestCmd: "mkdir -p reports && cp report-src.xml reports/report.xml", JUnitGlob: "reports/*.xml"})
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "story"})["id"].(string)
+
+	raw := func(tool string, args map[string]any) string {
+		t.Helper()
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: %v %s", tool, err, text(res))
+		}
+		return text(res)
+	}
+	baseline := map[string]string{
+		"get_overview": raw("get_overview", map[string]any{}),
+		"get_tree":     raw("get_tree", map[string]any{"story_id": story}),
+		"next_story":   raw("next_story", map[string]any{}),
+		"audit":        raw("audit", map[string]any{}),
+		"board":        withoutBoardStamp(renderBoard(t, cs)),
+	}
+	if strings.Contains(baseline["get_overview"], `"activities"`) {
+		t.Fatalf("overview without activity gained activities field: %s", baseline["get_overview"])
+	}
+
+	temporary := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "temporary"})["id"].(string)
+	call(t, cs, "delete_node", map[string]any{"id": temporary})
+	after := map[string]string{
+		"get_overview": raw("get_overview", map[string]any{}),
+		"get_tree":     raw("get_tree", map[string]any{"story_id": story}),
+		"next_story":   raw("next_story", map[string]any{}),
+		"audit":        raw("audit", map[string]any{}),
+		"board":        withoutBoardStamp(renderBoard(t, cs)),
+	}
+	for surface, want := range baseline {
+		if got := after[surface]; got != want {
+			t.Errorf("%s changed without activity:\nwant %s\ngot  %s", surface, want, got)
+		}
+	}
+
+	a1 := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "position": 5})
+	a2 := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Ship"})
+	a3 := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Learn", "position": 1})
+	if a1["id"] != "UA-2" || a1["position"] != float64(5) || a2["id"] != "UA-3" || a2["position"] != float64(6) || a3["position"] != float64(1) {
+		t.Fatalf("activity creation: a1=%v a2=%v a3=%v", a1, a2, a3)
+	}
+	o := call(t, cs, "get_overview", map[string]any{})
+	activities := o["activities"].([]any)
+	got := []string{}
+	for _, item := range activities {
+		got = append(got, item.(map[string]any)["id"].(string))
+	}
+	if fmt.Sprint(got) != "[UA-4 UA-2 UA-3]" {
+		t.Fatalf("activity order=%v", got)
+	}
+	call(t, cs, "update_node", map[string]any{"id": "UA-3", "position": 0})
+	o = call(t, cs, "get_overview", map[string]any{})
+	if o["activities"].([]any)[0].(map[string]any)["id"] != "UA-3" {
+		t.Fatalf("updated activity position ignored: %v", o["activities"])
+	}
+}
+
+// TestActivityReferenceAcceptance_AT_48_UT_47 proves exhaustive activity
+// deletion guards and placed-story freshness isolation through MCP.
+func TestActivityReferenceAcceptance_AT_48_UT_47(t *testing.T) {
+	cs := client(t)
+	story1 := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "one"})["id"].(string)
+	story2 := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "two"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "body": "old"})["id"].(string)
+	for _, story := range []string{story1, story2} {
+		if err := lastStore.SetStoryActivity("p1", story, activity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	callErr(t, cs, "delete_node", map[string]any{"id": activity}, "delete blocked", "placed story "+story1, "placed story "+story2)
+
+	approveMCP(t, cs, story1)
+	before := call(t, cs, "get_tree", map[string]any{"story_id": story1})
+	// Activity title belongs in map output now; isolate lifecycle card marker.
+	markerBefore := boardCardMarker(renderBoard(t, cs), story1)
+	call(t, cs, "update_node", map[string]any{"id": activity, "title": "Build products", "body": "new"})
+	after := call(t, cs, "get_tree", map[string]any{"story_id": story1})
+	markerAfter := boardCardMarker(renderBoard(t, cs), story1)
+	beforeStory := before["story"].(map[string]any)
+	afterStory := after["story"].(map[string]any)
+	if beforeStory["content_hash"] != afterStory["content_hash"] || beforeStory["fresh"] != afterStory["fresh"] || fmt.Sprint(before["blocking_problems"]) != fmt.Sprint(after["blocking_problems"]) {
+		t.Fatalf("activity edit changed story content hash, approval freshness, or blocking problems:\nbefore=%v\nafter=%v", before, after)
+	}
+	if markerBefore == "" || markerAfter != markerBefore {
+		t.Fatalf("activity edit changed placed story integrity marker on board: before=%q after=%q", markerBefore, markerAfter)
 	}
 }

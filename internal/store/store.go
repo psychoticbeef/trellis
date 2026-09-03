@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS nodes (
 	body          TEXT NOT NULL DEFAULT '',
 	covers        TEXT NOT NULL DEFAULT '[]',
 	status        TEXT NOT NULL DEFAULT '',
+	position      INTEGER NOT NULL DEFAULT 0,
+	activity_id   TEXT NOT NULL DEFAULT '',
+	rank          INTEGER NOT NULL DEFAULT 0,
+	slice         INTEGER NOT NULL DEFAULT 0,
 	approved_content_hash TEXT NOT NULL DEFAULT '',
 	approved_parent_hash  TEXT NOT NULL DEFAULT '',
 	created_at    TEXT NOT NULL,
@@ -140,6 +144,16 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate paths: %w", err)
 	}
+	for _, column := range []struct {
+		name    string
+		typeSQL string
+	}{{"position", "INTEGER NOT NULL DEFAULT 0"}, {"activity_id", "TEXT NOT NULL DEFAULT ''"}, {"rank", "INTEGER NOT NULL DEFAULT 0"}, {"slice", "INTEGER NOT NULL DEFAULT 0"}} {
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE nodes ADD COLUMN %s %s`, column.name, column.typeSQL)); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("migrate nodes %s: %w", column.name, err)
+		}
+	}
 	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN release_branch TEXT NOT NULL DEFAULT 'main'`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		db.Close()
@@ -176,6 +190,14 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_arch_singleton ON nodes(project_id, parent_id) WHERE kind='arch'`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate arch index: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_activity_position ON nodes(project_id, position) WHERE kind='activity'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate activity position index: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_story_activity ON nodes(project_id, activity_id, slice, rank) WHERE kind='story' AND activity_id<>''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate story activity index: %w", err)
 	}
 	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS specs_fts USING fts5(project_id UNINDEXED, node_id UNINDEXED, body)`); err != nil {
 		db.Close()
@@ -312,13 +334,13 @@ func (s *Store) SetCounter(projectID, scope string, n int) error {
 
 // ---- nodes ----
 
-const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, approved_content_hash, approved_parent_hash, created_at, updated_at`
+const nodeCols = `id, project_id, kind, parent_id, title, body, covers, paths, status, position, activity_id, rank, slice, approved_content_hash, approved_parent_hash, created_at, updated_at`
 
 func scanNode(row interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
 	var covers, paths, created, updated string
 	err := row.Scan(&n.ID, &n.ProjectID, (*string)(&n.Kind), &n.ParentID, &n.Title, &n.Body, &covers, &paths, &n.Status,
-		&n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
+		&n.Position, &n.ActivityID, &n.Rank, &n.Slice, &n.ApprovedContentHash, &n.ApprovedParentHash, &created, &updated)
 	if err != nil {
 		return n, err
 	}
@@ -342,9 +364,9 @@ func coversJSON(covers []string) string {
 }
 
 func (s *Store) InsertNode(n model.Node) error {
-	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO nodes (`+nodeCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.ProjectID, string(n.Kind), n.ParentID, n.Title, n.Body, coversJSON(n.Covers), stringsJSON(n.Paths), n.Status,
-		n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
+		n.Position, n.ActivityID, n.Rank, n.Slice, n.ApprovedContentHash, n.ApprovedParentHash, now(), now())
 	if err != nil {
 		return err
 	}
@@ -365,6 +387,31 @@ func (s *Store) SetNodePaths(projectID, id string, paths []string) error {
 	return err
 }
 
+func (s *Store) SetNodePosition(projectID, id string, position int) error {
+	_, err := s.db.Exec(`UPDATE nodes SET position=?, updated_at=? WHERE project_id=? AND id=?`, position, now(), projectID, id)
+	return err
+}
+
+// SetStoryActivity persists backbone activity metadata without rank or slice.
+// Story placement uses SetStoryPlacement.
+func (s *Store) SetStoryActivity(projectID, storyID, activityID string) error {
+	_, err := s.db.Exec(`UPDATE nodes SET activity_id=?, updated_at=? WHERE project_id=? AND id=? AND kind='story'`,
+		activityID, now(), projectID, storyID)
+	return err
+}
+
+func (s *Store) SetStoryPlacement(projectID, storyID, activityID string, rank, slice int) error {
+	res, err := s.db.Exec(`UPDATE nodes SET activity_id=?, rank=?, slice=?, updated_at=? WHERE project_id=? AND id=? AND kind='story'`,
+		activityID, rank, slice, now(), projectID, storyID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("story %q: %w", storyID, ErrNotFound)
+	}
+	return nil
+}
+
 func (s *Store) GetNode(projectID, id string) (model.Node, error) {
 	n, err := scanNode(s.db.QueryRow(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND id=?`, projectID, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -378,6 +425,15 @@ func (s *Store) GetNode(projectID, id string) (model.Node, error) {
 func (s *Store) UpdateNodeContent(n model.Node) error {
 	_, err := s.db.Exec(`UPDATE nodes SET title=?, body=?, covers=?, updated_at=? WHERE project_id=? AND id=?`,
 		n.Title, n.Body, coversJSON(n.Covers), now(), n.ProjectID, n.ID)
+	if err != nil {
+		return err
+	}
+	return s.reindexNode(n.ProjectID, n.ID)
+}
+
+func (s *Store) UpdateNodeContentAndPosition(n model.Node) error {
+	_, err := s.db.Exec(`UPDATE nodes SET title=?, body=?, covers=?, position=?, updated_at=? WHERE project_id=? AND id=?`,
+		n.Title, n.Body, coversJSON(n.Covers), n.Position, now(), n.ProjectID, n.ID)
 	if err != nil {
 		return err
 	}
@@ -435,6 +491,27 @@ func (s *Store) ListNodes(projectID string) ([]model.Node, error) {
 
 func (s *Store) ListNodesByKind(projectID string, kind model.Kind) ([]model.Node, error) {
 	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND kind=? ORDER BY created_at, id`, projectID, string(kind))
+}
+
+func (s *Store) ListActivities(projectID string) ([]model.Node, error) {
+	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND kind='activity' ORDER BY position, CAST(SUBSTR(id, 4) AS INTEGER)`, projectID)
+}
+
+func (s *Store) NextActivityPosition(projectID string) (int, error) {
+	var position int
+	err := s.db.QueryRow(`SELECT COALESCE(MAX(position), 0) + 1 FROM nodes WHERE project_id=? AND kind='activity'`, projectID).Scan(&position)
+	return position, err
+}
+
+func (s *Store) ListStoriesByActivity(projectID, activityID string) ([]model.Node, error) {
+	return s.listNodes(`SELECT `+nodeCols+` FROM nodes WHERE project_id=? AND kind='story' AND activity_id=? ORDER BY slice, rank, CAST(SUBSTR(id, 4) AS INTEGER)`, projectID, activityID)
+}
+
+func (s *Store) NextStoryRank(projectID, activityID string, slice int) (int, error) {
+	var rank int
+	err := s.db.QueryRow(`SELECT COALESCE(MAX(rank), 0) + 1 FROM nodes WHERE project_id=? AND kind='story' AND activity_id=? AND slice=?`,
+		projectID, activityID, slice).Scan(&rank)
+	return rank, err
 }
 
 func (s *Store) ListChildren(projectID, parentID string) ([]model.Node, error) {
@@ -795,6 +872,34 @@ func (s *Store) SearchFTS(projectID, query string) ([]FTSHit, error) {
 			return nil, err
 		}
 		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// SearchActivityFTS returns at most limit matching activity ids. Relevance is
+// primary; activity position and numeric id make equal scores deterministic.
+func (s *Store) SearchActivityFTS(projectID, query string, limit int) ([]string, error) {
+	match := buildFTSQuery(query)
+	if match == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT n.id
+		FROM specs_fts
+		JOIN nodes n ON n.project_id=specs_fts.project_id AND n.id=specs_fts.node_id
+		WHERE specs_fts MATCH ? AND specs_fts.project_id=? AND n.kind='activity'
+		ORDER BY bm25(specs_fts), n.position, CAST(SUBSTR(n.id, 4) AS INTEGER)
+		LIMIT ?`, match, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

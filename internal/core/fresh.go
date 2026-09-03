@@ -177,6 +177,9 @@ type TreeNode struct {
 	Problems []string      `json:"problems,omitempty"`
 	Covers   []string      `json:"covers,omitempty"`
 	Paths    []string      `json:"paths,omitempty"`
+	Activity string        `json:"activity,omitempty"`
+	Rank     *int          `json:"rank,omitempty"`
+	Slice    *int          `json:"slice,omitempty"`
 	Deps     []DepInfo     `json:"depends_on,omitempty"`
 	Evidence *EvidenceInfo `json:"evidence,omitempty"`
 	Children []TreeNode    `json:"children,omitempty"`
@@ -259,6 +262,13 @@ func (e *Engine) treeNode(n model.Node, full bool) (TreeNode, error) {
 		return TreeNode{}, err
 	}
 	tn := TreeNode{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Hash: hash, Fresh: fresh, Problems: reasons, Covers: n.Covers, Paths: n.Paths}
+	if n.Kind == model.KindStory && n.ActivityID != "" {
+		tn.Activity = n.ActivityID
+		if n.Rank > 0 && n.Slice > 0 {
+			rank, slice := n.Rank, n.Slice
+			tn.Rank, tn.Slice = &rank, &slice
+		}
+	}
 	if full {
 		tn.Body = n.Body
 	}
@@ -303,20 +313,25 @@ func (e *Engine) treeNode(n model.Node, full bool) (TreeNode, error) {
 }
 
 type NodeReport struct {
-	ID       string        `json:"id"`
-	Kind     string        `json:"kind"`
-	ParentID string        `json:"parent_id,omitempty"`
-	Title    string        `json:"title"`
-	Body     string        `json:"body"`
-	Covers   []string      `json:"covers,omitempty"`
-	Paths    []string      `json:"paths,omitempty"`
-	Status   string        `json:"status,omitempty"`
-	Hash     string        `json:"content_hash"`
-	Fresh    bool          `json:"fresh"`
-	Problems []string      `json:"problems,omitempty"`
-	Deps     []NodeDep     `json:"depends_on,omitempty"`
-	Evidence *EvidenceInfo `json:"evidence,omitempty"`
-	ACs      []ACInfo      `json:"acceptance_criteria,omitempty"`
+	ID            string         `json:"id"`
+	Kind          string         `json:"kind"`
+	ParentID      string         `json:"parent_id,omitempty"`
+	Title         string         `json:"title"`
+	Body          string         `json:"body"`
+	Covers        []string       `json:"covers,omitempty"`
+	Paths         []string       `json:"paths,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	Position      *int           `json:"position,omitempty"`
+	Activity      string         `json:"activity,omitempty"`
+	Rank          *int           `json:"rank,omitempty"`
+	Slice         *int           `json:"slice,omitempty"`
+	Hash          string         `json:"content_hash"`
+	Fresh         bool           `json:"fresh"`
+	Problems      []string       `json:"problems,omitempty"`
+	Deps          []NodeDep      `json:"depends_on,omitempty"`
+	Evidence      *EvidenceInfo  `json:"evidence,omitempty"`
+	ACs           []ACInfo       `json:"acceptance_criteria,omitempty"`
+	PlacementHint *PlacementHint `json:"placement_hint,omitempty"`
 }
 
 type NodeDep struct {
@@ -345,6 +360,17 @@ func (e *Engine) Node(id string) (NodeReport, error) {
 	r := NodeReport{
 		ID: n.ID, Kind: string(n.Kind), ParentID: n.ParentID, Title: n.Title, Body: n.Body,
 		Covers: n.Covers, Paths: n.Paths, Status: n.Status, Hash: hash, Fresh: fresh, Problems: reasons,
+	}
+	if n.Kind == model.KindActivity {
+		position := n.Position
+		r.Position = &position
+	}
+	if n.Kind == model.KindStory && n.ActivityID != "" {
+		r.Activity = n.ActivityID
+		if n.Rank > 0 && n.Slice > 0 {
+			rank, slice := n.Rank, n.Slice
+			r.Rank, r.Slice = &rank, &slice
+		}
 	}
 	if model.TestSpecKinds[n.Kind] {
 		if ev, ok, err := e.st.GetEvidence(e.pid(), n.ID); err != nil {
@@ -389,6 +415,9 @@ type StorySummary struct {
 	Title                     string `json:"title"`
 	Status                    string `json:"status"`
 	Ready                     bool   `json:"gates_open"`
+	Activity                  string `json:"activity,omitempty"`
+	Rank                      *int   `json:"rank,omitempty"`
+	Slice                     *int   `json:"slice,omitempty"`
 	TokensMain                *int64 `json:"tokens_main,omitempty"`
 	TokensSubagents           *int64 `json:"tokens_subagents,omitempty"`
 	TokensMainInput           *int64 `json:"tokens_main_input,omitempty"`
@@ -400,6 +429,12 @@ type StorySummary struct {
 	TokensSubagentsCacheRead  *int64 `json:"tokens_subagents_cache_read,omitempty"`
 	TokensSubagentsCacheWrite *int64 `json:"tokens_subagents_cache_write,omitempty"`
 	Usage                     string `json:"usage,omitempty"`
+}
+
+type ActivitySummary struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Position int    `json:"position"`
 }
 
 type CCSummary struct {
@@ -421,13 +456,15 @@ type CoverageFile struct {
 }
 
 type Overview struct {
-	Project      string           `json:"project"`
-	Description  string           `json:"description,omitempty"`
-	Coverage     *CoverageSummary `json:"coverage,omitempty"`
-	Stories      []StorySummary   `json:"stories"`
-	CrossCutting []CCSummary      `json:"cross_cutting"`
-	Glossary     []store.TermDef  `json:"glossary"`
-	StaleNodes   []string         `json:"stale_nodes"`
+	Project      string            `json:"project"`
+	Description  string            `json:"description,omitempty"`
+	Coverage     *CoverageSummary  `json:"coverage,omitempty"`
+	Activities   []ActivitySummary `json:"activities,omitempty"`
+	StoryMap     *StoryMapOverview `json:"story_map,omitempty"`
+	Stories      []StorySummary    `json:"stories"`
+	CrossCutting []CCSummary       `json:"cross_cutting"`
+	Glossary     []store.TermDef   `json:"glossary"`
+	StaleNodes   []string          `json:"stale_nodes"`
 }
 
 func (e *Engine) Overview() (Overview, error) {
@@ -457,6 +494,13 @@ func (e *Engine) Overview() (Overview, error) {
 		}
 		o.Coverage = cs
 	}
+	activities, err := e.st.ListActivities(e.pid())
+	if err != nil {
+		return o, err
+	}
+	for _, activity := range activities {
+		o.Activities = append(o.Activities, ActivitySummary{ID: activity.ID, Title: activity.Title, Position: activity.Position})
+	}
 	stories, err := e.st.ListNodesByKind(e.pid(), model.KindStory)
 	if err != nil {
 		return o, err
@@ -467,6 +511,13 @@ func (e *Engine) Overview() (Overview, error) {
 			return o, err
 		}
 		summary := StorySummary{ID: s.ID, Title: s.Title, Status: s.Status, Ready: len(problems) == 0}
+		if s.ActivityID != "" {
+			summary.Activity = s.ActivityID
+			if s.Rank > 0 && s.Slice > 0 {
+				rank, slice := s.Rank, s.Slice
+				summary.Rank, summary.Slice = &rank, &slice
+			}
+		}
 		usage, ok, err := e.st.GetStoryUsage(e.pid(), s.ID)
 		if err != nil {
 			return o, err
@@ -492,6 +543,10 @@ func (e *Engine) Overview() (Overview, error) {
 			summary.Usage = FormatStoryUsage(usage)
 		}
 		o.Stories = append(o.Stories, summary)
+	}
+	if len(activities) > 0 {
+		storyMap := buildStoryMapOverview(activities, stories, o.Stories)
+		o.StoryMap = &storyMap
 	}
 	ccs, err := e.st.ListNodesByKind(e.pid(), model.KindCrossCutting)
 	if err != nil {

@@ -14,12 +14,13 @@ import (
 const exportVersion = 1
 
 type exportDoc struct {
-	Version  int             `yaml:"trellis_export"`
-	Project  exportProject   `yaml:"project"`
-	Glossary []store.TermDef `yaml:"glossary,omitempty"`
-	Counters map[string]int  `yaml:"counters,omitempty"`
-	Cross    []exportNode    `yaml:"cross_cutting,omitempty"`
-	Stories  []exportNode    `yaml:"stories,omitempty"`
+	Version    int             `yaml:"trellis_export"`
+	Project    exportProject   `yaml:"project"`
+	Glossary   []store.TermDef `yaml:"glossary,omitempty"`
+	Counters   map[string]int  `yaml:"counters,omitempty"`
+	Cross      []exportNode    `yaml:"cross_cutting,omitempty"`
+	Activities []exportNode    `yaml:"activities,omitempty"`
+	Stories    []exportNode    `yaml:"stories,omitempty"`
 }
 
 // exportProject deliberately omits the repo path: it is machine-local and
@@ -59,6 +60,10 @@ type exportNode struct {
 	Status              string          `yaml:"status,omitempty"`
 	Covers              []string        `yaml:"covers,omitempty"`
 	Paths               []string        `yaml:"paths,omitempty"`
+	Position            *int            `yaml:"position,omitempty"`
+	ActivityID          string          `yaml:"activity,omitempty"`
+	Rank                *int            `yaml:"rank,omitempty"`
+	Slice               *int            `yaml:"slice,omitempty"`
 	ACs                 []exportAC      `yaml:"acceptance_criteria,omitempty"`
 	DependsOn           []exportDep     `yaml:"depends_on,omitempty"`
 	ApprovedContentHash string          `yaml:"approved_content_hash,omitempty"`
@@ -70,8 +75,16 @@ type exportNode struct {
 func (e *Engine) exportNode(n model.Node) (exportNode, error) {
 	en := exportNode{
 		ID: n.ID, Kind: string(n.Kind), Title: n.Title, Body: n.Body,
-		Status: n.Status, Covers: n.Covers, Paths: n.Paths,
+		Status: n.Status, Covers: n.Covers, Paths: n.Paths, ActivityID: n.ActivityID,
 		ApprovedContentHash: n.ApprovedContentHash, ApprovedParentHash: n.ApprovedParentHash,
+	}
+	if n.Kind == model.KindActivity {
+		position := n.Position
+		en.Position = &position
+	}
+	if n.Kind == model.KindStory && n.ActivityID != "" && n.Rank > 0 && n.Slice > 0 {
+		rank, slice := n.Rank, n.Slice
+		en.Rank, en.Slice = &rank, &slice
 	}
 	if n.Kind == model.KindStory {
 		acs, err := e.st.ListACs(e.pid(), n.ID)
@@ -128,20 +141,30 @@ func (e *Engine) ExportYAML() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, kind := range []model.Kind{model.KindCrossCutting, model.KindStory} {
-		nodes, err := e.st.ListNodesByKind(e.pid(), kind)
+	for _, kind := range []model.Kind{model.KindCrossCutting, model.KindActivity, model.KindStory} {
+		var nodes []model.Node
+		if kind == model.KindActivity {
+			nodes, err = e.st.ListActivities(e.pid())
+		} else {
+			nodes, err = e.st.ListNodesByKind(e.pid(), kind)
+		}
 		if err != nil {
 			return "", err
 		}
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].CreatedAt.Before(nodes[j].CreatedAt) })
+		if kind != model.KindActivity {
+			sort.Slice(nodes, func(i, j int) bool { return nodes[i].CreatedAt.Before(nodes[j].CreatedAt) })
+		}
 		for _, n := range nodes {
 			en, err := e.exportNode(n)
 			if err != nil {
 				return "", err
 			}
-			if kind == model.KindCrossCutting {
+			switch kind {
+			case model.KindCrossCutting:
 				doc.Cross = append(doc.Cross, en)
-			} else {
+			case model.KindActivity:
+				doc.Activities = append(doc.Activities, en)
+			default:
 				doc.Stories = append(doc.Stories, en)
 			}
 		}
@@ -197,7 +220,16 @@ func Import(st *store.Store, data []byte, proj store.Project) error {
 		n := model.Node{
 			ID: en.ID, ProjectID: pid, Kind: model.Kind(en.Kind), ParentID: parent,
 			Title: en.Title, Body: en.Body, Covers: en.Covers, Paths: en.Paths, Status: en.Status,
-			ApprovedContentHash: en.ApprovedContentHash, ApprovedParentHash: en.ApprovedParentHash,
+			ActivityID: en.ActivityID, ApprovedContentHash: en.ApprovedContentHash, ApprovedParentHash: en.ApprovedParentHash,
+		}
+		if en.Position != nil {
+			n.Position = *en.Position
+		}
+		if en.Rank != nil {
+			n.Rank = *en.Rank
+		}
+		if en.Slice != nil {
+			n.Slice = *en.Slice
 		}
 		if err := st.InsertNode(n); err != nil {
 			return err
@@ -223,7 +255,10 @@ func Import(st *store.Store, data []byte, proj store.Project) error {
 		}
 		return nil
 	}
-	for _, en := range append(append([]exportNode{}, doc.Cross...), doc.Stories...) {
+	roots := append([]exportNode{}, doc.Cross...)
+	roots = append(roots, doc.Activities...)
+	roots = append(roots, doc.Stories...)
+	for _, en := range roots {
 		if err := insert(en, ""); err != nil {
 			return err
 		}

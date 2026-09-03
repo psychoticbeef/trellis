@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"trellis/internal/model"
 	"trellis/internal/store"
 )
 
@@ -32,6 +33,21 @@ func TestExportFormat_UT_26(t *testing.T) {
 	if _, err := e.AddAC(s.ID, "a 'given'", "w\nmultiline", "t"); err != nil {
 		t.Fatal(err)
 	}
+	position := 0
+	activity, err := e.CreateNodeWithPosition(model.KindActivity, "", "activity: zero", "", nil, &position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activityReport, err := e.Node(activity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Approve(activity.ID, activityReport.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStoryPlacement("p1", s.ID, activity.ID, 2, 3); err != nil {
+		t.Fatal(err)
+	}
 	doc, err := e.ExportYAML()
 	if err != nil {
 		t.Fatal(err)
@@ -52,15 +68,27 @@ func TestExportFormat_UT_26(t *testing.T) {
 	if doc != doc2 {
 		t.Fatalf("round trip diverged:\n--- original ---\n%s\n--- reimport ---\n%s", doc, doc2)
 	}
+	if !strings.Contains(doc, "activities:") || !strings.Contains(doc, "position: 0") || !strings.Contains(doc, "activity: UA-1") ||
+		!strings.Contains(doc, "rank: 2") || !strings.Contains(doc, "slice: 3") {
+		t.Fatalf("story placement missing from export:\n%s", doc)
+	}
 
-	// Counters preserved: the next story id continues, never reuses.
+	// Counters preserved: new story and activity ids continue, never reuse.
 	e2b, _ := NewEngine(st, "p2")
-	n, err := e2b.CreateNode("story", "", "next", "", nil)
+	slice := 1
+	n, err := e2b.CreateNodeWithPlacement(model.KindStory, "", "next", "", nil, nil, activity.ID, &slice)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n.ID != "US-2" {
 		t.Fatalf("counter not preserved: new story id %s, want US-2", n.ID)
+	}
+	a, err := e2b.CreateNode(model.KindActivity, "", "next activity", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID != "UA-2" {
+		t.Fatalf("activity counter not preserved: new activity id %s, want UA-2", a.ID)
 	}
 
 	// Version rejection.
@@ -71,5 +99,52 @@ func TestExportFormat_UT_26(t *testing.T) {
 	}
 	if err := Import(st, []byte("not: [valid"), store.Project{ID: "p4", Name: "x"}); err == nil {
 		t.Fatal("invalid yaml must error")
+	}
+}
+
+func TestLegacyActivityReferenceRoundTrip(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.CreateProject(store.Project{ID: "p1", Name: "legacy", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewEngine(st, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, err := e.CreateNode(model.KindStory, "", "Story", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity, err := e.CreateNode(model.KindActivity, "", "Build", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStoryActivity("p1", story.ID, activity.ID); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := e.ExportYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(doc, "rank:") || strings.Contains(doc, "slice:") {
+		t.Fatalf("legacy activity reference gained invalid placement fields:\n%s", doc)
+	}
+	if err := Import(st, []byte(doc), store.Project{ID: "p2", Name: "legacy", BaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	copyEngine, err := NewEngine(st, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyDoc, err := copyEngine.ExportYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc != copyDoc {
+		t.Fatalf("legacy activity reference round trip diverged:\n%s\n---\n%s", doc, copyDoc)
 	}
 }

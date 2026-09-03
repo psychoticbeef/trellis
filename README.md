@@ -93,8 +93,8 @@ Data lives in `~/.local/share/trellis/trellis.db` (override with
 
 ## Interfaces
 
-- **MCP (the agent)**: get_overview, create_node, update_node, delete_node,
-  get_node, get_tree, add/update/delete_acceptance_criterion, approve,
+- **MCP (the agent)**: get_overview, create_node, set_map_position, update_node,
+  delete_node, get_node, get_tree, add/update/delete_acceptance_criterion, approve,
   link_dependency, unlink_dependency, transition.
 - **CLI (humans and trusted extension code)**: init, projects, config (gate
   commands are configurable only here — the agent cannot weaken the gates),
