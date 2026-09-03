@@ -29,6 +29,9 @@ func TestMapOverviewAcceptance_AT_55_AT_56_IT_49(t *testing.T) {
 	build := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "position": 2})["id"].(string)
 	ship := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Ship", "position": 1})["id"].(string)
 	learn := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Learn", "position": 3})["id"].(string)
+	for _, activity := range []string{build, ship, learn} {
+		approveMCP(t, cs, activity)
+	}
 	placements := []struct {
 		story, activity string
 		rank, slice     int

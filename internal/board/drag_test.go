@@ -27,6 +27,17 @@ type mapMoveFixture struct {
 	secondActivityID string
 }
 
+func approveMapActivity(t *testing.T, e *core.Engine, id string) {
+	t.Helper()
+	report, err := e.Node(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Approve(id, report.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newMapMoveFixture(t *testing.T) mapMoveFixture {
 	t.Helper()
 	e, st := liveSetup(t)
@@ -43,6 +54,8 @@ func newMapMoveFixture(t *testing.T) mapMoveFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	approveMapActivity(t, e, first.ID)
+	approveMapActivity(t, e, second.ID)
 	if _, err := e.SetMapPosition(story.ID, first.ID, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -461,6 +474,7 @@ func TestLiveMapPositionEndpoint_IT_54(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	approveMapActivity(t, e2, p2Activity.ID)
 	if _, err := e2.SetMapPosition(p2Story.ID, p2Activity.ID, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -681,6 +695,7 @@ func TestLiveStoryMapMoveAcceptance_AT_62(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	approveMapActivity(t, e2, p2Activity.ID)
 	if _, err := e2.SetMapPosition(p2Story.ID, p2Activity.ID, 1); err != nil {
 		t.Fatal(err)
 	}

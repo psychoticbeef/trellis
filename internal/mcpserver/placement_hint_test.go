@@ -35,6 +35,7 @@ func TestPlacementHintAcceptance_AT_59_UT_59_IT_51(t *testing.T) {
 	activities := make([]string, len(definitions))
 	for i, definition := range definitions {
 		activities[i] = call(t, cs, "create_node", definition)["id"].(string)
+		approveMCP(t, cs, activities[i])
 	}
 	mapped := call(t, cs, "create_node", map[string]any{
 		"kind": "story", "title": "placed", "activity_id": activities[0], "slice": 2,

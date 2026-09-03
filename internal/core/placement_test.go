@@ -18,6 +18,8 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 	mustCreate(t, e, model.KindStory, "", "incomplete seed", nil)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
 	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+	approve(t, e, build.ID)
+	approve(t, e, ship.ID)
 
 	one, err := e.CreateNodeWithPlacement(model.KindStory, "", "one", "", nil, nil, build.ID, intPtr(1))
 	if err != nil {
@@ -62,6 +64,110 @@ func TestStoryPlacementEngine_UT_50(t *testing.T) {
 	wantErr(t, err, "only valid on story nodes")
 }
 
+// TestPlacementRequiresApprovedActivity_UT_66_IT_56 proves both placement
+// boundaries reject never-approved and stale activities before writing, then
+// retain existing placement behavior after approval.
+func TestPlacementRequiresApprovedActivity_UT_66_IT_56(t *testing.T) {
+	e, st := newEngineStore(t)
+	seed := mustCreate(t, e, model.KindStory, "", "incomplete seed", nil)
+	activity := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+
+	beforeSeed, err := e.Node(seed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.SetMapPosition(seed.ID, activity.ID, 1)
+	wantErr(t, err, "set_map_position placement rejected", "activity "+activity.ID+" is never approved")
+	afterSeed, err := e.Node(seed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeSeed.Activity != afterSeed.Activity || beforeSeed.Rank != nil || afterSeed.Rank != nil || beforeSeed.Slice != nil || afterSeed.Slice != nil {
+		t.Fatalf("rejected placement wrote story: before=%+v after=%+v", beforeSeed, afterSeed)
+	}
+
+	beforeCounters, _ := st.ListCounters(e.Project.ID)
+	beforeEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	_, err = e.CreateNodeWithPlacement(model.KindStory, "", "blocked", "", nil, nil, activity.ID, intPtr(2))
+	wantErr(t, err, "create_node placement rejected", "activity "+activity.ID+" is never approved")
+	afterCounters, _ := st.ListCounters(e.Project.ID)
+	afterEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	if !reflect.DeepEqual(beforeCounters, afterCounters) || !reflect.DeepEqual(beforeEvents, afterEvents) {
+		t.Fatalf("rejected create wrote state: counters %v -> %v, events %v -> %v", beforeCounters, afterCounters, beforeEvents, afterEvents)
+	}
+
+	approve(t, e, activity.ID)
+	newBody := "changed"
+	if _, err := e.UpdateNode(activity.ID, nil, &newBody, nil); err != nil {
+		t.Fatal(err)
+	}
+	beforeStaleCounters, _ := st.ListCounters(e.Project.ID)
+	beforeStaleEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	_, err = e.SetMapPosition(seed.ID, activity.ID, 1)
+	wantErr(t, err, "activity "+activity.ID+" is stale", "changed since approval")
+	_, err = e.CreateNodeWithPlacement(model.KindStory, "", "still blocked", "", nil, nil, activity.ID, intPtr(0))
+	wantErr(t, err, "activity "+activity.ID+" is stale", "changed since approval", "slice must be at least 1")
+	afterStaleCounters, _ := st.ListCounters(e.Project.ID)
+	afterStaleEvents, _ := st.ListEvents(e.Project.ID, 1000)
+	if !reflect.DeepEqual(beforeStaleCounters, afterStaleCounters) || !reflect.DeepEqual(beforeStaleEvents, afterStaleEvents) {
+		t.Fatalf("stale activity rejections wrote state: counters %v -> %v, events %v -> %v", beforeStaleCounters, afterStaleCounters, beforeStaleEvents, afterStaleEvents)
+	}
+
+	approve(t, e, activity.ID)
+	placed, err := e.SetMapPosition(seed.ID, activity.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := e.CreateNodeWithPlacement(model.KindStory, "", "placed", "", nil, nil, activity.ID, intPtr(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placed.Rank != 1 || created.Rank != 2 || created.ActivityID != activity.ID || created.Slice != 1 {
+		t.Fatalf("approved activity placement changed: placed=%+v created=%+v", placed, created)
+	}
+}
+
+// TestActivityEditPlacementDecoupling_UT_67_IT_56 proves activity content
+// invalidation stays isolated from placed-story hashes and approvals.
+func TestActivityEditPlacementDecoupling_UT_67_IT_56(t *testing.T) {
+	e := newEngine(t)
+	story := mustCreate(t, e, model.KindStory, "", "story", nil)
+	activity := mustCreate(t, e, model.KindActivity, "", "Build", nil)
+	approve(t, e, activity.ID)
+	approve(t, e, story.ID)
+	if _, err := e.SetMapPosition(story.ID, activity.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	beforeStory, err := e.Node(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newTitle, newBody := "Build products", "changed body"
+	if _, err := e.UpdateNode(activity.ID, &newTitle, &newBody, nil); err != nil {
+		t.Fatal(err)
+	}
+	afterStory, err := e.Node(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterActivity, err := e.Node(activity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeStory.Hash != afterStory.Hash || !beforeStory.Fresh || !afterStory.Fresh || !reflect.DeepEqual(beforeStory.Problems, afterStory.Problems) {
+		t.Fatalf("activity edit changed placed story: before=%+v after=%+v", beforeStory, afterStory)
+	}
+	if afterActivity.Fresh || !strings.Contains(strings.Join(afterActivity.Problems, "\n"), "changed since approval") {
+		t.Fatalf("edited activity did not report stale: %+v", afterActivity)
+	}
+	approve(t, e, activity.ID)
+	reapproved, err := e.Node(activity.ID)
+	if err != nil || !reapproved.Fresh {
+		t.Fatalf("activity did not become fresh after re-approval: node=%+v err=%v", reapproved, err)
+	}
+}
+
 // TestPlacementGateState_UT_52_UT_57_IT_47 proves mutation guards, per-call
 // derivation without a flag, exhaustive candidates, and map-incomplete
 // compatibility.
@@ -87,6 +193,8 @@ func TestPlacementGateState_UT_52_UT_57_IT_47(t *testing.T) {
 	first := mustCreate(t, e, model.KindStory, "", "first unmapped", nil)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
 	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+	approve(t, e, build.ID)
+	approve(t, e, ship.ID)
 
 	// Existing unmapped story means map incomplete: old behavior stays for
 	// story creation and placement-clear validation.
@@ -154,6 +262,8 @@ func TestPlacementPersistenceAndLifecycle_IT_45(t *testing.T) {
 	mustCreate(t, e, model.KindStory, "", "incomplete seed", nil)
 	build := mustCreate(t, e, model.KindActivity, "", "Build", nil)
 	ship := mustCreate(t, e, model.KindActivity, "", "Ship", nil)
+	approve(t, e, build.ID)
+	approve(t, e, ship.ID)
 	todo := mustCreate(t, e, model.KindStory, "", "todo story", nil)
 	if _, err := e.SetMapPosition(todo.ID, build.ID, 2); err != nil {
 		t.Fatal(err)
