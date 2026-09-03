@@ -130,6 +130,12 @@ func TestPlacementRequiresApprovedActivity_UT_66_IT_56(t *testing.T) {
 // TestActivityEditPlacementDecoupling_UT_67_IT_56 proves activity content
 // invalidation stays isolated from placed-story hashes and approvals.
 func TestActivityEditPlacementDecoupling_UT_67_IT_56(t *testing.T) {
+	withoutActivity := newEngine(t)
+	unmapped, err := withoutActivity.CreateNode(model.KindStory, "", "unmapped", "", nil)
+	if err != nil || unmapped.ActivityID != "" || unmapped.Rank != 0 || unmapped.Slice != 0 {
+		t.Fatalf("no-activity story creation changed: story=%+v err=%v", unmapped, err)
+	}
+
 	e := newEngine(t)
 	story := mustCreate(t, e, model.KindStory, "", "story", nil)
 	activity := mustCreate(t, e, model.KindActivity, "", "Build", nil)
@@ -144,27 +150,38 @@ func TestActivityEditPlacementDecoupling_UT_67_IT_56(t *testing.T) {
 	}
 
 	newTitle, newBody := "Build products", "changed body"
-	if _, err := e.UpdateNode(activity.ID, &newTitle, &newBody, nil); err != nil {
-		t.Fatal(err)
+	updates := []struct {
+		name        string
+		title, body *string
+	}{
+		{name: "title", title: &newTitle},
+		{name: "body", body: &newBody},
 	}
-	afterStory, err := e.Node(story.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterActivity, err := e.Node(activity.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if beforeStory.Hash != afterStory.Hash || !beforeStory.Fresh || !afterStory.Fresh || !reflect.DeepEqual(beforeStory.Problems, afterStory.Problems) {
-		t.Fatalf("activity edit changed placed story: before=%+v after=%+v", beforeStory, afterStory)
-	}
-	if afterActivity.Fresh || !strings.Contains(strings.Join(afterActivity.Problems, "\n"), "changed since approval") {
-		t.Fatalf("edited activity did not report stale: %+v", afterActivity)
-	}
-	approve(t, e, activity.ID)
-	reapproved, err := e.Node(activity.ID)
-	if err != nil || !reapproved.Fresh {
-		t.Fatalf("activity did not become fresh after re-approval: node=%+v err=%v", reapproved, err)
+	for _, update := range updates {
+		t.Run(update.name, func(t *testing.T) {
+			if _, err := e.UpdateNode(activity.ID, update.title, update.body, nil); err != nil {
+				t.Fatal(err)
+			}
+			afterStory, err := e.Node(story.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterActivity, err := e.Node(activity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if beforeStory.Hash != afterStory.Hash || !beforeStory.Fresh || !afterStory.Fresh || !reflect.DeepEqual(beforeStory.Problems, afterStory.Problems) {
+				t.Fatalf("activity %s edit changed placed story: before=%+v after=%+v", update.name, beforeStory, afterStory)
+			}
+			if afterActivity.Fresh || !strings.Contains(strings.Join(afterActivity.Problems, "\n"), "changed since approval") {
+				t.Fatalf("%s-edited activity did not report stale: %+v", update.name, afterActivity)
+			}
+			approve(t, e, activity.ID)
+			reapproved, err := e.Node(activity.ID)
+			if err != nil || !reapproved.Fresh {
+				t.Fatalf("activity did not become fresh after %s re-approval: node=%+v err=%v", update.name, reapproved, err)
+			}
+		})
 	}
 }
 
