@@ -81,8 +81,12 @@ func TestActivityCRUDAndOverview_UT_47(t *testing.T) {
 	if _, err := e.CreateNodeWithPosition(model.KindStory, "", "bad", "", nil, intPtr(3)); err == nil || !strings.Contains(err.Error(), "position is only valid on activity") {
 		t.Fatalf("story position error=%v", err)
 	}
-	if _, err := e.UpdateNodeWithPosition(story.ID, nil, nil, nil, intPtr(3)); err == nil || !strings.Contains(err.Error(), "position is only valid on activity") {
-		t.Fatalf("story position update error=%v", err)
+	emptyTitle := " "
+	badCovers := []string{"US-999.AC-1"}
+	if _, err := e.UpdateNodeWithPosition(story.ID, &emptyTitle, nil, &badCovers, intPtr(3)); err == nil ||
+		!strings.Contains(err.Error(), story.ID) || !strings.Contains(err.Error(), "position is only valid on activity") ||
+		!strings.Contains(err.Error(), "title must not be empty") || !strings.Contains(err.Error(), "covers is only valid on acceptance_test") {
+		t.Fatalf("exhaustive story update error=%v", err)
 	}
 }
 

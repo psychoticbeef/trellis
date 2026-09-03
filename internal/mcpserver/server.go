@@ -56,7 +56,7 @@ func New(engine *core.Engine, version string) *mcp.Server {
 		Description: "Update a node's title/body/covers, or an activity's position. Content changes invalidate the node's approval and make children and dependents stale; position is metadata."},
 		s.updateNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_node",
-		Description: "Delete a node. Blocked while it has children or dependents."},
+		Description: "Delete a node. Blocked while it has children or dependents, or while an activity has placed stories."},
 		s.deleteNode)
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_node",
 		Description: "Full content of one node incl. content_hash (needed for approve) and current hashes of its dependencies."},

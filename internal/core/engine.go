@@ -218,9 +218,9 @@ func (e *Engine) validateCovers(storyID string, covers []string) error {
 	return nil
 }
 
-// UpdateNode applies a partial content update. Nil fields stay unchanged.
-// Approval invalidation is implicit: the content hash changes, so the node is
-// no longer approved and all children/dependents go stale.
+// UpdateNode applies a partial update. Nil fields stay unchanged. Content
+// changes invalidate approval and stale children/dependents; activity position
+// is metadata and leaves content hash and approval freshness unchanged.
 func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]string, position *int) (model.Node, error) {
 	n, err := e.st.GetNode(e.pid(), id)
 	if err != nil {
@@ -232,26 +232,31 @@ func (e *Engine) updatenodeUnlocked(id string, title, body *string, covers *[]st
 		}
 		return model.Node{}, fmt.Errorf("nothing to update: provide title, body and/or covers")
 	}
+	var violations []string
 	if position != nil && n.Kind != model.KindActivity {
-		return model.Node{}, fmt.Errorf("position is only valid on activity nodes; %s is kind %s", n.ID, n.Kind)
+		violations = append(violations, fmt.Sprintf("position is only valid on activity nodes; %s is kind %s", n.ID, n.Kind))
+	}
+	if title != nil && strings.TrimSpace(*title) == "" {
+		violations = append(violations, "title must not be empty")
+	}
+	if covers != nil {
+		if n.Kind != model.KindAcceptanceTest {
+			violations = append(violations, fmt.Sprintf("covers is only valid on acceptance_test nodes; %s is kind %s", n.ID, n.Kind))
+		} else if err := e.validateCovers(n.ParentID, *covers); err != nil {
+			violations = append(violations, err.Error())
+		}
+	}
+	if len(violations) > 0 {
+		return model.Node{}, fmt.Errorf("update rejected for %s:\n- %s", n.ID, strings.Join(violations, "\n- "))
 	}
 	contentChanged := title != nil || body != nil || covers != nil
 	if title != nil {
-		if strings.TrimSpace(*title) == "" {
-			return model.Node{}, fmt.Errorf("title must not be empty")
-		}
 		n.Title = *title
 	}
 	if body != nil {
 		n.Body = *body
 	}
 	if covers != nil {
-		if n.Kind != model.KindAcceptanceTest {
-			return model.Node{}, fmt.Errorf("covers is only valid on acceptance_test nodes")
-		}
-		if err := e.validateCovers(n.ParentID, *covers); err != nil {
-			return model.Node{}, err
-		}
 		n.Covers = *covers
 	}
 	if position != nil {
