@@ -224,15 +224,27 @@ func (e *Engine) validatePlacement(operation, activityID string, slice *int) err
 	if activityID == "" {
 		violations = append(violations, "activity_id is required when slice is provided")
 	} else {
-		found := false
-		for _, activity := range activities {
-			if activity.ID == activityID {
-				found = true
+		var target *model.Node
+		for i := range activities {
+			if activities[i].ID == activityID {
+				target = &activities[i]
 				break
 			}
 		}
-		if !found {
+		if target == nil {
 			violations = append(violations, fmt.Sprintf("unknown activity %q", activityID))
+		} else {
+			fresh, reasons, err := e.freshness(*target)
+			if err != nil {
+				return err
+			}
+			if !fresh {
+				state := "stale"
+				if target.ApprovedContentHash == "" {
+					state = "never approved"
+				}
+				violations = append(violations, fmt.Sprintf("activity %s is %s: %s", target.ID, state, strings.Join(reasons, "; ")))
+			}
 		}
 	}
 	if slice == nil {

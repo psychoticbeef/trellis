@@ -31,6 +31,7 @@ func TestPlacementHintState_UT_59_IT_51(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		approve(t, e, activities[i].ID)
 	}
 	if _, err := e.CreateNodeWithPlacement(model.KindStory, "", "placed", "", nil, nil, activities[0].ID, intPtr(2)); err != nil {
 		t.Fatal(err)

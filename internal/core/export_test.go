@@ -38,6 +38,13 @@ func TestExportFormat_UT_26(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	activityReport, err := e.Node(activity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Approve(activity.ID, activityReport.Hash, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.SetStoryPlacement("p1", s.ID, activity.ID, 2, 3); err != nil {
 		t.Fatal(err)
 	}

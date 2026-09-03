@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +20,7 @@ func TestPlacementMutationAndProjection_AT_49_IT_46(t *testing.T) {
 	cs := client(t)
 	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "done story"})["id"].(string)
 	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})["id"].(string)
+	approveMCP(t, cs, activity)
 	approveMCP(t, cs, story)
 	if err := lastStore.SetNodeStatus("p1", story, model.StatusDone); err != nil {
 		t.Fatal(err)
@@ -49,9 +51,8 @@ func TestPlacementMutationAndProjection_AT_49_IT_46(t *testing.T) {
 	}
 }
 
-// TestOptionalUnmappedStory_AT_50 proves story creation stays placement-optional
-// while the story map is incomplete.
-func TestOptionalUnmappedStory_AT_50(t *testing.T) {
+func assertNoActivityCreationCompatibility(t *testing.T) {
+	t.Helper()
 	cs := client(t)
 	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
 	for _, field := range []string{"activity", "rank", "slice"} {
@@ -61,12 +62,83 @@ func TestOptionalUnmappedStory_AT_50(t *testing.T) {
 	}
 }
 
+// TestOptionalUnmappedStory_AT_50 preserves evidence for optional story
+// creation while the story map is incomplete.
+func TestOptionalUnmappedStory_AT_50(t *testing.T) {
+	assertNoActivityCreationCompatibility(t)
+}
+
+// TestNoActivityCreationCompatibility_AT_67_IT_57 proves story creation stays
+// placement-optional when no activity exists.
+func TestNoActivityCreationCompatibility_AT_67_IT_57(t *testing.T) {
+	assertNoActivityCreationCompatibility(t)
+}
+
+// TestPlacementActivityApprovalAcceptance_AT_65_IT_57 proves both MCP
+// placement entry points reject never approved and stale activity targets,
+// then succeed after approval.
+func TestPlacementActivityApprovalAcceptance_AT_65_IT_57(t *testing.T) {
+	cs := client(t)
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "body": "original"})["id"].(string)
+
+	callErr(t, cs, "set_map_position", map[string]any{"story_id": story, "activity_id": activity, "slice": 1},
+		"set_map_position placement rejected", "activity "+activity+" is never approved")
+	callErr(t, cs, "create_node", map[string]any{"kind": "story", "title": "blocked", "activity_id": activity, "slice": 2},
+		"create_node placement rejected", "activity "+activity+" is never approved")
+	unmapped := call(t, cs, "get_node", map[string]any{"id": story})
+	if _, ok := unmapped["activity"]; ok {
+		t.Fatalf("rejected placement wrote story: %v", unmapped)
+	}
+
+	approveMCP(t, cs, activity)
+	call(t, cs, "update_node", map[string]any{"id": activity, "body": "changed"})
+	callErr(t, cs, "set_map_position", map[string]any{"story_id": story, "activity_id": activity, "slice": 1},
+		"activity "+activity+" is stale", "changed since approval")
+	callErr(t, cs, "create_node", map[string]any{"kind": "story", "title": "still blocked", "activity_id": activity, "slice": 2},
+		"activity "+activity+" is stale", "changed since approval")
+
+	approveMCP(t, cs, activity)
+	placed := call(t, cs, "set_map_position", map[string]any{"story_id": story, "activity_id": activity, "slice": 1})
+	created := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "placed", "activity_id": activity, "slice": 1})
+	if created["id"] != "US-2" || placed["rank"] != float64(1) || created["rank"] != float64(2) || created["activity"] != activity {
+		t.Fatalf("rejected create wrote state or approved placement changed: placed=%v created=%v", placed, created)
+	}
+}
+
+// TestPlacedStoryActivityFreshnessAcceptance_AT_66_IT_57 proves activity
+// edits stale only the activity, not placed-story approval.
+func TestPlacedStoryActivityFreshnessAcceptance_AT_66_IT_57(t *testing.T) {
+	cs := client(t)
+	story := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "story"})["id"].(string)
+	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "body": "original"})["id"].(string)
+	approveMCP(t, cs, activity)
+	approveMCP(t, cs, story)
+	call(t, cs, "set_map_position", map[string]any{"story_id": story, "activity_id": activity, "slice": 1})
+	before := call(t, cs, "get_node", map[string]any{"id": story})
+
+	call(t, cs, "update_node", map[string]any{"id": activity, "title": "Build products", "body": "changed"})
+	after := call(t, cs, "get_node", map[string]any{"id": story})
+	activityAfter := call(t, cs, "get_node", map[string]any{"id": activity})
+	if before["content_hash"] != after["content_hash"] || before["fresh"] != true || after["fresh"] != true || fmt.Sprint(before["problems"]) != fmt.Sprint(after["problems"]) {
+		t.Fatalf("activity edit changed story approval: before=%v after=%v", before, after)
+	}
+	if activityAfter["fresh"] != false || !strings.Contains(fmt.Sprint(activityAfter["problems"]), "changed since approval") {
+		t.Fatalf("edited activity did not report stale: %v", activityAfter)
+	}
+	approveMCP(t, cs, activity)
+	if fresh := call(t, cs, "get_node", map[string]any{"id": activity})["fresh"]; fresh != true {
+		t.Fatalf("re-approved activity fresh=%v", fresh)
+	}
+}
+
 // TestPlacementGateAcceptance_AT_52_IT_47 proves dynamic map-complete
 // derivation and mutation guards through MCP.
 func TestPlacementGateAcceptance_AT_52_IT_47(t *testing.T) {
 	cs := client(t)
 	first := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "first unmapped"})["id"].(string)
 	activity := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build"})["id"].(string)
+	approveMCP(t, cs, activity)
 	second := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "second unmapped"})["id"].(string)
 	call(t, cs, "set_map_position", map[string]any{"story_id": first, "activity_id": activity, "slice": 1})
 	call(t, cs, "set_map_position", map[string]any{"story_id": second, "activity_id": activity, "slice": 2})
@@ -93,12 +165,26 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	createFound, placementFound := false, false
 	for _, tool := range tools.Tools {
+		if tool.Name == "create_node" {
+			createFound = true
+			blob, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(tool.Description, "approved and fresh activity") || !strings.Contains(string(blob), "approved and fresh activity id") {
+				t.Fatalf("create_node activity approval contract missing: description=%q schema=%s", tool.Description, blob)
+			}
+			continue
+		}
 		if tool.Name != "set_map_position" {
 			continue
 		}
-		found = true
+		placementFound = true
+		if !strings.Contains(tool.Description, "approved and fresh activity") {
+			t.Fatalf("set_map_position activity approval contract missing: %q", tool.Description)
+		}
 		blob, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			t.Fatal(err)
@@ -121,8 +207,8 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 			t.Fatalf("set_map_position output schema=%s", out)
 		}
 	}
-	if !found {
-		t.Fatal("set_map_position tool missing")
+	if !createFound || !placementFound {
+		t.Fatalf("placement tools missing: create_node=%t set_map_position=%t", createFound, placementFound)
 	}
 
 	unmapped := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "unmapped"})
@@ -133,6 +219,8 @@ func TestPlacementRoundTripValidation_AT_51_UT_49_IT_46(t *testing.T) {
 	}
 	build := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Build", "position": 2})["id"].(string)
 	ship := call(t, cs, "create_node", map[string]any{"kind": "activity", "title": "Ship", "position": 1})["id"].(string)
+	approveMCP(t, cs, build)
+	approveMCP(t, cs, ship)
 	placed := call(t, cs, "create_node", map[string]any{"kind": "story", "title": "placed", "activity_id": build, "slice": 3})
 	if placed["activity"] != build || placed["rank"] != float64(1) || placed["slice"] != float64(3) {
 		t.Fatalf("create_node placement=%v", placed)

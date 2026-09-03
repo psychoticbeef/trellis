@@ -27,6 +27,9 @@ func TestStoryMapOverview_UT_55_IT_49(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, activity := range []model.Node{build, ship, learn} {
+		approve(t, e, activity.ID)
+	}
 	placements := []struct {
 		story       model.Node
 		activity    string
