@@ -54,6 +54,7 @@
 - **US-49** — Walking skeleton in doctor
 - **US-50** — Story map drag and drop
 - **US-51** — Placement requires an approved activity
+- **US-52** — Authentic German README introduction
 
 ## Glossary
 

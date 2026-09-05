@@ -71,14 +71,14 @@ glossary:
     - term: walking skeleton
       definition: Slice 1 with at least one story under every activity.
 counters:
-    AS: 51
-    AT: 67
+    AS: 52
+    AT: 68
     CC: 5
-    DD: 66
-    IT: 57
+    DD: 67
+    IT: 58
     UA: 9
-    US: 51
-    UT: 67
+    US: 52
+    UT: 68
     ac:US-1: 3
     ac:US-2: 3
     ac:US-3: 4
@@ -130,6 +130,7 @@ counters:
     ac:US-49: 4
     ac:US-50: 3
     ac:US-51: 4
+    ac:US-52: 2
 cross_cutting:
     - id: CC-1
       kind: cross_cutting
@@ -4631,3 +4632,72 @@ stories:
             tests:
                 - trellis/internal/mcpserver::TestNoActivityCreationCompatibility_AT_67_IT_57
             recorded_at: "2026-09-03T18:01:55Z"
+    - id: US-52
+      kind: story
+      title: Authentic German README introduction
+      body: As project maintainer I want project goals documented in my authentic German wording so readers understand intent, limits and workflow before technical documentation.
+      status: done
+      paths:
+        - README.md
+        - cmd/trellis/readme_test.go
+      activity: UA-1
+      rank: 1
+      slice: 4
+      acceptance_criteria:
+        - id: US-52.AC-1
+          given: README at repository root
+          when: reader opens project documentation
+          then: German project-goal introduction appears before technical description and preserves maintainer wording while correcting spelling, capitalization and punctuation.
+        - id: US-52.AC-2
+          given: German project-goal introduction
+          when: reader follows named workflow references
+          then: pi-trellis link, /trellis:auto on, /compact, develop and trellis release references remain present and readable.
+      approved_content_hash: 5a7f87c4be376653181afae049403a675575b428b7dbb5471fabd8efeb00d2d9
+      children:
+        - id: AS-52
+          kind: arch
+          title: README-owned project motivation
+          body: README owns short German project motivation before technical documentation. Marked boundaries separate maintainer wording from generated documentation. Content changes no runtime behavior. Repository tests verify exact maintained text, placement, workflow references and pi-trellis link.
+          approved_content_hash: 6a6b3c07f7c6ecc38cfa61c5b7560be9103f06e88732073d3de1d12306ec0751
+          approved_parent_hash: 5a7f87c4be376653181afae049403a675575b428b7dbb5471fabd8efeb00d2d9
+          children:
+            - id: DD-67
+              kind: detail_design
+              title: Maintained introduction text
+              body: Insert German ai;dr section directly after project heading. Keep maintainer vocabulary and tone unchanged except spelling, capitalization and punctuation corrections. Delimit section with human-maintained markers, retain pi-trellis URL and preserve existing technical documentation below.
+              approved_content_hash: e03976bf9aa2bd6aab67f6be5a49a6f65a20b5e01a031131a831ecc594eaf146
+              approved_parent_hash: 6a6b3c07f7c6ecc38cfa61c5b7560be9103f06e88732073d3de1d12306ec0751
+              children:
+                - id: UT-68
+                  kind: unit_test
+                  title: README text preservation unit test
+                  body: Unit-test exact maintained German block, corrected spellings and punctuation, boundary markers, command references, pi-trellis link and unchanged technical-description prefix.
+                  approved_content_hash: 68d20594ce2fa60a3af42b88bfedc7b6004bb44fefab51b5b2e104c602f1a9c1
+                  approved_parent_hash: e03976bf9aa2bd6aab67f6be5a49a6f65a20b5e01a031131a831ecc594eaf146
+                  evidence:
+                    tests:
+                        - trellis/cmd/trellis::TestHumanMaintainedReadme_AT_68_IT_58_UT_68
+                    recorded_at: "2026-09-05T11:33:49Z"
+            - id: IT-58
+              kind: integration_test
+              title: README structure integration
+              body: Read README as shipped from repository root and verify maintained introduction composes with existing technical documentation without removing project description.
+              approved_content_hash: f7e323ea6d30f2ec02c7a8fdf925804eef193c32a60fdb824a46342640945044
+              approved_parent_hash: 6a6b3c07f7c6ecc38cfa61c5b7560be9103f06e88732073d3de1d12306ec0751
+              evidence:
+                tests:
+                    - trellis/cmd/trellis::TestHumanMaintainedReadme_AT_68_IT_58_UT_68
+                recorded_at: "2026-09-05T11:33:49Z"
+        - id: AT-68
+          kind: acceptance_test
+          title: German README introduction acceptance
+          body: Read repository-root README and assert exact German introduction, its position before technical description, marked boundaries, pi-trellis link and workflow references. Reject wording drift outside spelling, capitalization and punctuation corrections.
+          covers:
+            - US-52.AC-1
+            - US-52.AC-2
+          approved_content_hash: c15e0a13d50266d8ad5c36dde0a09170ffc551c9b1be7dd190595702b8145096
+          approved_parent_hash: 5a7f87c4be376653181afae049403a675575b428b7dbb5471fabd8efeb00d2d9
+          evidence:
+            tests:
+                - trellis/cmd/trellis::TestHumanMaintainedReadme_AT_68_IT_58_UT_68
+            recorded_at: "2026-09-05T11:33:49Z"
